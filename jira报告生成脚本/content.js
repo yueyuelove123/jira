@@ -1098,32 +1098,53 @@
     runIssueTransition(issue, ["Start Progress", "开始处理", "处理中"]);
   const doneIssue = (issue) =>
     runIssueTransition(issue, ["Done", "完成", "已完成"]);
-  const recordIssueWorklogAndDone = async ({ issue, worker, started, seconds, comment, setStatus }) => {
+  const recordIssueWorklogsAndDone = async ({ issue, worker, worklogs, comment, setStatus }) => {
     if (!issue?.key || !issue?.id) throw new Error("缺少子任务信息，无法记录工时");
     if (!worker) throw new Error("缺少当前用户，无法记录工时");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(started || ""))) {
-      throw new Error("记录日期格式不正确");
-    }
-    if (!(Number(seconds) > 0)) throw new Error("记录工时必须大于 0");
+    const rows = Array.isArray(worklogs) ? worklogs : [];
+    if (!rows.length) throw new Error("至少需要一条工时记录");
+    const totalSeconds = rows.reduce((sum, row) => sum + (Number(row?.seconds) || 0), 0);
+    rows.forEach((row, i) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(row?.started || ""))) {
+        throw new Error(`第 ${i + 1} 条记录日期格式不正确`);
+      }
+      if (!(Number(row?.seconds) > 0)) throw new Error(`第 ${i + 1} 条记录工时必须大于 0`);
+    });
+    if (!(totalSeconds > 0)) throw new Error("记录工时必须大于 0");
     setStatus?.(`正在将 ${issue.key} 置为处理中...`);
     const startedProgress = await startProgressIssue(issue);
     if (!startedProgress) log(`${issue.key} 未找到 Start Progress 动作，继续记录工时`);
     await sleep(350);
-    setStatus?.(`正在记录 ${issue.key}：${formatSeconds(seconds)}...`);
-    await postTempoWorklog({
-      issue,
-      worker,
-      started,
-      seconds,
-      remainingEstimate: 0,
-      comment: (comment || "").trim(),
-    });
+    let recordedSeconds = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      recordedSeconds += Number(row.seconds) || 0;
+      const remainingEstimate = Math.max(0, totalSeconds - recordedSeconds);
+      setStatus?.(`正在记录 ${issue.key}（${i + 1}/${rows.length}）：${row.started} ${formatSeconds(row.seconds)}...`);
+      await postTempoWorklog({
+        issue,
+        worker,
+        started: row.started,
+        seconds: row.seconds,
+        remainingEstimate,
+        comment: (row.comment ?? comment ?? "").trim(),
+      });
+      await sleep(250);
+    }
     await sleep(350);
     setStatus?.(`正在将 ${issue.key} 置为完成...`);
     const done = await doneIssue(issue);
     if (!done) log(`${issue.key} 未找到 Done 动作`);
     return true;
   };
+  const recordIssueWorklogAndDone = async ({ issue, worker, started, seconds, comment, setStatus }) =>
+    recordIssueWorklogsAndDone({
+      issue,
+      worker,
+      worklogs: [{ started, seconds }],
+      comment,
+      setStatus,
+    });
 
   /* ========== Subtask create ========== */
   const SUBTASK_ISSUE_TYPE_ID = "10104";
@@ -1308,7 +1329,15 @@
     if (document.getElementById(IDS.modal)) return;
     let context = null;
     let worker = null;
-    let statusEl, submitBtn, cancelBtn, info;
+    let statusEl, submitBtn, cancelBtn, addSubtaskBtn, info;
+    let setFormDisabled = null;
+    const canSubmit = () => !!(context?.fixVersionId && worker);
+    const setProcessing = (processing) => {
+      setFormDisabled?.(processing);
+      if (submitBtn) submitBtn.disabled = processing || !canSubmit();
+      if (cancelBtn) cancelBtn.disabled = processing;
+      if (addSubtaskBtn) addSubtaskBtn.disabled = processing;
+    };
     const setStatus = (msg, err = false) => {
       if (!statusEl) return;
       statusEl.textContent = msg || "";
@@ -1339,6 +1368,19 @@
       bodyBuilder(content, m) {
         content.style.overflow = "auto";
         content.style.gap = "12px";
+        m.__createSubtaskRows = [];
+        setFormDisabled = (disabled) => {
+          (m.__createSubtaskRows || []).forEach((subtask) => {
+            subtask.summaryInput.disabled = disabled;
+            subtask.addWorklogBtn.disabled = disabled;
+            subtask.removeBtn.disabled = disabled || m.__createSubtaskRows.length <= 1;
+            subtask.worklogRows.forEach((row) => {
+              row.startedInput.disabled = disabled;
+              row.hoursInput.disabled = disabled;
+              row.removeBtn.disabled = disabled || subtask.worklogRows.length <= 1;
+            });
+          });
+        };
         const makeInput = (type, value) => {
           const el = document.createElement("input");
           el.type = type;
@@ -1368,6 +1410,54 @@
           }
           return wrap;
         };
+        const syncWorklogRows = (subtask) => {
+          subtask.worklogRows.forEach((row) => {
+            const onlyOne = subtask.worklogRows.length <= 1;
+            row.removeBtn.style.visibility = onlyOne ? "hidden" : "visible";
+            row.removeBtn.disabled = onlyOne;
+          });
+        };
+        const syncSubtaskRows = () => {
+          m.__createSubtaskRows.forEach((subtask, i) => {
+            subtask.titleEl.textContent = `子任务 ${i + 1}`;
+            const onlyOne = m.__createSubtaskRows.length <= 1;
+            subtask.removeBtn.style.display = onlyOne ? "none" : "inline-flex";
+            subtask.removeBtn.disabled = onlyOne;
+            syncWorklogRows(subtask);
+          });
+        };
+        const addWorklogRow = (subtask, { started = formatDateYmd(), hours = "0.5h" } = {}) => {
+          const rowEl = document.createElement("div");
+          Object.assign(rowEl.style, {
+            display: "grid",
+            gridTemplateColumns: "minmax(120px, 1fr) minmax(90px, .8fr) auto",
+            gap: "8px",
+            alignItems: "end",
+          });
+          const startedInput = makeInput("date", started);
+          const hoursInput = makeInput("text", hours);
+          hoursInput.placeholder = "0.5h";
+          const removeBtn = mkBtn("删除", { variant: "ghost", size: "sm" });
+          Object.assign(removeBtn.style, {
+            height: "32px",
+            padding: "0 8px",
+            alignSelf: "end",
+          });
+          const row = { rowEl, startedInput, hoursInput, removeBtn };
+          removeBtn.onclick = () => {
+            if (subtask.worklogRows.length <= 1) return;
+            subtask.worklogRows = subtask.worklogRows.filter((it) => it !== row);
+            rowEl.remove();
+            syncWorklogRows(subtask);
+          };
+          rowEl.appendChild(makeField("记录日期", startedInput));
+          rowEl.appendChild(makeField("工时", hoursInput, "支持 0.5h、0.5、4h、30m 写法"));
+          rowEl.appendChild(removeBtn);
+          subtask.worklogRows.push(row);
+          subtask.worklogList.appendChild(rowEl);
+          syncWorklogRows(subtask);
+          return row;
+        };
         info = document.createElement("div");
         Object.assign(info.style, {
           border: "1px solid var(--tm-border)",
@@ -1381,26 +1471,116 @@
         content.appendChild(info);
         renderInfo();
 
-        const summaryInput = makeInput("text", "");
-        summaryInput.placeholder = "请输入子任务标题";
-        content.appendChild(makeField("标题", summaryInput));
-        const controls = document.createElement("div");
-        Object.assign(controls.style, {
-          display: "grid",
-          gridTemplateColumns: "minmax(130px, 1fr) minmax(130px, 1fr)",
-          gap: "8px",
-          alignItems: "end",
+        const formList = document.createElement("div");
+        Object.assign(formList.style, {
+          display: "flex",
+          flexDirection: "column",
+          gap: "10px",
         });
-        const startedInput = makeInput("date", formatDateYmd());
-        const hoursInput = makeInput("text", "0.5h");
-        controls.appendChild(makeField("记录日期", startedInput, "默认当天，可手动选择"));
-        controls.appendChild(makeField("预估工时", hoursInput, "支持 0.5h、0.5、4h、30m 写法"));
-        content.appendChild(controls);
+        content.appendChild(formList);
+
+        const addSubtaskRow = ({ focus = false } = {}) => {
+          const card = document.createElement("div");
+          Object.assign(card.style, {
+            border: "1px solid rgba(148,163,184,0.45)",
+            borderRadius: "10px",
+            padding: "10px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+            background: "rgba(148,163,184,0.06)",
+          });
+          const head = document.createElement("div");
+          Object.assign(head.style, {
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          });
+          const titleEl = document.createElement("div");
+          Object.assign(titleEl.style, {
+            fontWeight: "600",
+            fontSize: "13px",
+            flex: "1 1 auto",
+          });
+          const addWorklogBtn = mkBtn("新增工时", { variant: "ghost", size: "sm" });
+          const removeBtn = mkBtn("删除子任务", { variant: "ghost", size: "sm" });
+          head.appendChild(titleEl);
+          head.appendChild(addWorklogBtn);
+          head.appendChild(removeBtn);
+          card.appendChild(head);
+
+          const summaryInput = makeInput("text", "");
+          summaryInput.placeholder = "请输入子任务标题";
+          card.appendChild(makeField("标题", summaryInput));
+
+          const worklogList = document.createElement("div");
+          Object.assign(worklogList.style, {
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+          });
+          card.appendChild(worklogList);
+
+          const subtask = {
+            card,
+            titleEl,
+            summaryInput,
+            addWorklogBtn,
+            worklogList,
+            worklogRows: [],
+            removeBtn,
+          };
+          addWorklogBtn.onclick = () => {
+            const row = addWorklogRow(subtask);
+            row.hoursInput.focus();
+          };
+          removeBtn.onclick = () => {
+            if (m.__createSubtaskRows.length <= 1) return;
+            m.__createSubtaskRows = m.__createSubtaskRows.filter((it) => it !== subtask);
+            card.remove();
+            syncSubtaskRows();
+          };
+          m.__createSubtaskRows.push(subtask);
+          formList.appendChild(card);
+          addWorklogRow(subtask);
+          syncSubtaskRows();
+          if (focus) summaryInput.focus();
+          return subtask;
+        };
+
+        m.__addCreateSubtaskRow = () => addSubtaskRow({ focus: true });
+        m.__getCreateSubtaskPayload = () => {
+          const subtasks = m.__createSubtaskRows || [];
+          if (!subtasks.length) throw new Error("至少需要一个子任务");
+          return subtasks.map((subtask, i) => {
+            const summary = (subtask.summaryInput.value || "").trim();
+            if (!summary) throw new Error(`子任务 ${i + 1} 标题不能为空`);
+            const worklogs = subtask.worklogRows.map((row, j) => {
+              const started = (row.startedInput.value || "").trim();
+              const rawHours = (row.hoursInput.value || "").trim();
+              const seconds = parseWorkSeconds(rawHours);
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(started)) {
+                throw new Error(`子任务 ${i + 1} 第 ${j + 1} 条记录日期格式不正确`);
+              }
+              if (seconds <= 0) {
+                throw new Error(`子任务 ${i + 1} 第 ${j + 1} 条工时格式不正确，请填写 0.5h、0.5、4h 或 30m`);
+              }
+              return { started, seconds };
+            });
+            const totalSeconds = worklogs.reduce((sum, row) => sum + row.seconds, 0);
+            return {
+              summary,
+              estimate: formatSeconds(totalSeconds),
+              totalSeconds,
+              worklogs,
+            };
+          });
+        };
+        addSubtaskRow();
 
         statusEl = document.createElement("div");
         setStatus("正在加载当前任务修复版本和登录用户...");
         content.appendChild(statusEl);
-        m.__createSubtaskForm = { summaryInput, startedInput, hoursInput };
         Promise.all([fetchCurrentIssueContextForSubtask(), getCurrentWorker()])
           .then(([ctx, u]) => {
             context = ctx;
@@ -1410,8 +1590,8 @@
               setStatus("当前任务没有修复版本，无法创建子任务", true);
               return;
             }
-            setStatus(`将创建测试子任务，修复版本使用“${context.fixVersionName}”，经办人使用“${u.displayName}”，创建后自动记录工时并完成状态。`);
-            if (submitBtn) submitBtn.disabled = false;
+            setStatus(`将创建一个或多个测试子任务，修复版本使用“${context.fixVersionName}”，经办人使用“${u.displayName}”，创建后自动记录工时并完成状态。`);
+            setProcessing(false);
           })
           .catch((e) => {
             log("加载创建子任务上下文失败", e);
@@ -1421,59 +1601,59 @@
           });
       },
       footerBuilder(footer, m) {
+        addSubtaskBtn = mkBtn("新增子任务", { variant: "ghost", size: "md" });
+        addSubtaskBtn.style.marginRight = "auto";
+        addSubtaskBtn.onclick = () => m.__addCreateSubtaskRow?.();
         cancelBtn = mkBtn("取消", { variant: "ghost", size: "md" });
         cancelBtn.onclick = () => m.close();
         submitBtn = mkBtn("创建并记工时", { variant: "primary", size: "md" });
         submitBtn.disabled = true;
         submitBtn.onclick = async () => {
-          const f = m.__createSubtaskForm;
-          if (!f || !context || !worker) return;
-          const summary = (f.summaryInput.value || "").trim();
-          const started = (f.startedInput.value || "").trim();
-          const estimate = normalizeWorkEstimate(f.hoursInput.value);
-          const seconds = parseWorkSeconds(f.hoursInput.value);
-          if (!summary) {
-            setStatus("标题不能为空", true);
-            return;
-          }
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(started)) {
-            setStatus("记录日期格式不正确", true);
-            return;
-          }
-          if (!estimate) {
-            setStatus("工时格式不正确，请填写 0.5h、0.5、4h 或 30m", true);
-            return;
-          }
-          if (seconds <= 0) {
-            setStatus("记录工时必须大于 0", true);
-            return;
-          }
-          submitBtn.disabled = true;
-          cancelBtn.disabled = true;
-          setStatus("正在创建子任务...");
+          if (!context || !worker) return;
+          let tasks = [];
           try {
-            const created = await postCreateSubtask({ context, worker, summary, estimate });
-            const keyText = created.key ? ` ${created.key}` : "";
-            setStatus(`已创建子任务${keyText}，正在准备记录工时...`);
-            const createdIssue = await fetchCreatedSubtaskIssue(created);
-            await recordIssueWorklogAndDone({
-              issue: createdIssue,
-              worker: worker.key,
-              started,
-              seconds,
-              comment: "",
-              setStatus,
-            });
-            setStatus(`已创建并完成 ${createdIssue.key}：${formatSeconds(seconds)}，正在刷新页面...`);
-            toast(`已创建并记录 ${createdIssue.key} 工时`);
+            tasks = m.__getCreateSubtaskPayload?.() || [];
+          } catch (e) {
+            setStatus(e.message || "填写内容不完整", true);
+            return;
+          }
+          const totalWorklogs = tasks.reduce((sum, task) => sum + task.worklogs.length, 0);
+          const totalSeconds = tasks.reduce((sum, task) => sum + task.totalSeconds, 0);
+          setProcessing(true);
+          setStatus(`正在创建 ${tasks.length} 个子任务...`);
+          try {
+            const createdKeys = [];
+            for (let i = 0; i < tasks.length; i++) {
+              const task = tasks[i];
+              setStatus(`正在创建子任务 ${i + 1}/${tasks.length}...`);
+              const created = await postCreateSubtask({
+                context,
+                worker,
+                summary: task.summary,
+                estimate: task.estimate,
+              });
+              const keyText = created.key ? ` ${created.key}` : "";
+              setStatus(`已创建子任务${keyText}，正在准备记录 ${task.worklogs.length} 条工时...`);
+              const createdIssue = await fetchCreatedSubtaskIssue(created);
+              createdKeys.push(createdIssue.key);
+              await recordIssueWorklogsAndDone({
+                issue: createdIssue,
+                worker: worker.key,
+                worklogs: task.worklogs,
+                comment: "",
+                setStatus: (msg, err) => setStatus(`子任务 ${i + 1}/${tasks.length}：${msg}`, err),
+              });
+            }
+            setStatus(`已创建并完成 ${createdKeys.length} 个子任务，记录 ${totalWorklogs} 条工时（${formatSeconds(totalSeconds)}），正在刷新页面...`);
+            toast(`已创建 ${createdKeys.length} 个子任务并记录工时`);
             setTimeout(() => location.reload(), 900);
           } catch (e) {
             log("创建并记录子任务工时失败", e);
             setStatus(e.message || "创建或记录失败", true);
-            submitBtn.disabled = false;
-            cancelBtn.disabled = false;
+            setProcessing(false);
           }
         };
+        footer.appendChild(addSubtaskBtn);
         footer.appendChild(cancelBtn);
         footer.appendChild(submitBtn);
       },

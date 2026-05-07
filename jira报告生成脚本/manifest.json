@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Jira 测试报告生成器",
-  "version": "2026.5.7.18",
+  "version": "2026.5.7.19",
   "description": "Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮",
   "author": "shengjiang",
   "icons": {
