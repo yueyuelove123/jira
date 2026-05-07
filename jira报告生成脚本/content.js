@@ -2393,7 +2393,13 @@
     let reporterSummaryList = null;
     let reporterPickers = [];
     let recomputeBusy = false;
+    let summaryInputEl = null;
     let setExecControlsDisabled = () => {};
+    const persistTestSummary = (raw) => {
+      testSummary = (raw || "").trim();
+      TestSummaryCache.saveOrRemove(currentKey, title, testSummary);
+      ctx.testSummary = testSummary;
+    };
  
     const extraMap = new Map();
     const getCtxKey = (c, i) =>
@@ -2599,6 +2605,9 @@
     };
  
     new ReportModal(buildCombined(), {
+      onClose: () => {
+        if (summaryInputEl) persistTestSummary(summaryInputEl.value);
+      },
       onToggleExecMode: () => buildCombined(),
       bodyBuilder(content, m) {
         modalRef = m;
@@ -2719,12 +2728,14 @@
           resize: "vertical", background: "transparent",
           color: "inherit", boxSizing: "border-box",
         });
-        si.addEventListener("input", debounce(() => {
-          testSummary = (si.value || "").trim();
-          TestSummaryCache.saveOrRemove(currentKey, title, testSummary);
-          ctx.testSummary = testSummary;
+        summaryInputEl = si;
+        const refreshSummaryPreview = debounce(() => {
           void recomputeAll({ rebuildContexts: false });
-        }, 200));
+        }, 200);
+        si.addEventListener("input", () => {
+          persistTestSummary(si.value);
+          refreshSummaryPreview();
+        });
         sw.appendChild(si);
         content.appendChild(sw);
  
