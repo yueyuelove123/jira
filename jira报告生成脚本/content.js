@@ -935,6 +935,107 @@
     }
     return r.json().catch(() => null);
   };
+  const getIssueTransitions = async (issueKey) => {
+    const r = await fetch(`/rest/api/2/issue/${encodeURIComponent(issueKey)}/transitions`, {
+      method: "GET", credentials: "include",
+      headers: {
+        Accept: "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+      },
+    });
+    if (!r.ok) throw new Error(`获取 ${issueKey} 状态流转失败（${r.status}）`);
+    const data = await r.json();
+    return Array.isArray(data?.transitions) ? data.transitions : [];
+  };
+  const matchTransition = (transitions, names) => {
+    const wanted = names.map((n) => String(n).toLowerCase());
+    return transitions.find((t) => {
+      const n = String(t?.name || "").trim().toLowerCase();
+      return wanted.some((w) => n === w || n.includes(w));
+    }) || null;
+  };
+  const doRestTransition = async (issueKey, transition) => {
+    const id = transition?.id;
+    if (!id) throw new Error(`缺少 ${issueKey} 状态流转 ID`);
+    const r = await fetch(`/rest/api/2/issue/${encodeURIComponent(issueKey)}/transitions`, {
+      method: "POST", credentials: "include",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+        "X-Atlassian-Token": "no-check",
+      },
+      body: JSON.stringify({ transition: { id: String(id) } }),
+    });
+    if (!r.ok && r.status !== 204) {
+      const detail = await r.text().catch(() => "");
+      throw new Error(`${issueKey} 执行 ${transition.name || id} 失败（${r.status}）${detail ? "：" + detail.slice(0, 120) : ""}`);
+    }
+    return true;
+  };
+  const legacyActionsAndOperations = async (issue) => {
+    const token = getXsrfToken();
+    if (!token) throw new Error("缺少 XSRF Token，无法执行旧版状态流转");
+    const id = issue?.id;
+    if (!id) throw new Error(`缺少 ${issue?.key || ""} issue id，无法执行旧版状态流转`);
+    const url = `/rest/api/1.0/issues/${encodeURIComponent(id)}/ActionsAndOperations?atl_token=${encodeURIComponent(token)}&_=${Date.now()}`;
+    const r = await fetch(url, {
+      method: "GET", credentials: "include",
+      headers: {
+        Accept: "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+      },
+    });
+    if (!r.ok) throw new Error(`获取 ${issue.key} 旧版操作失败（${r.status}）`);
+    return r.json();
+  };
+  const doLegacyTransition = async (issue, actionNames) => {
+    const data = await legacyActionsAndOperations(issue);
+    const actions = Array.isArray(data?.actions) ? data.actions : [];
+    const wanted = actionNames.map((n) => String(n).toLowerCase());
+    const action = actions.find((a) => {
+      const n = String(a?.name || "").trim().toLowerCase();
+      return wanted.some((w) => n === w || n.includes(w));
+    });
+    if (!action?.action) return false;
+    const token = data?.atlToken || getXsrfToken();
+    const params = new URLSearchParams({
+      id: String(issue.id),
+      action: String(action.action),
+      atl_token: token,
+      returnUrl: `/browse/${issue.key}`,
+      decorator: "dialog",
+      inline: "true",
+      _: String(Date.now()),
+    });
+    const r = await fetch(`/secure/WorkflowUIDispatcher.jspa?${params.toString()}`, {
+      method: "GET", credentials: "include",
+      headers: {
+        Accept: "text/html, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+      },
+    });
+    if (!r.ok) throw new Error(`${issue.key} 执行 ${action.name} 失败（${r.status}）`);
+    return true;
+  };
+  const runIssueTransition = async (issue, actionNames) => {
+    const key = issue?.key;
+    if (!key) throw new Error("缺少子任务 Key，无法执行状态流转");
+    try {
+      const transitions = await getIssueTransitions(key);
+      const transition = matchTransition(transitions, actionNames);
+      if (!transition) return false;
+      await doRestTransition(key, transition);
+      return true;
+    } catch (e) {
+      log("REST 状态流转失败，尝试旧版链路", e);
+      return doLegacyTransition(issue, actionNames);
+    }
+  };
+  const startProgressIssue = (issue) =>
+    runIssueTransition(issue, ["Start Progress", "开始处理", "处理中"]);
+  const doneIssue = (issue) =>
+    runIssueTransition(issue, ["Done", "完成", "已完成"]);
   const openSubtaskWorklogPanel = async (issueKey) => {
     if (document.getElementById(IDS.modal)) return;
     const key = String(issueKey || "").trim();
@@ -1105,8 +1206,12 @@
           });
           submitBtn.disabled = true;
           cancelBtn.disabled = true;
-          setStatus(`正在记录 ${issue.key}：${formatSeconds(seconds)}...`);
+          setStatus(`正在将 ${issue.key} 置为处理中...`);
           try {
+            const startedProgress = await startProgressIssue(issue);
+            if (!startedProgress) log(`${issue.key} 未找到 Start Progress 动作，继续记录工时`);
+            await sleep(350);
+            setStatus(`正在记录 ${issue.key}：${formatSeconds(seconds)}...`);
             await postTempoWorklog({
               issue,
               worker: worker.key,
@@ -1115,8 +1220,12 @@
               remainingEstimate: 0,
               comment: (f.commentInput.value || "").trim(),
             });
-            setStatus(`已记录 ${issue.key}：${formatSeconds(seconds)}`);
-            toast(`已记录 ${issue.key} 工时`);
+            await sleep(350);
+            setStatus(`正在将 ${issue.key} 置为完成...`);
+            const done = await doneIssue(issue);
+            if (!done) log(`${issue.key} 未找到 Done 动作`);
+            setStatus(`已记录 ${issue.key}：${formatSeconds(seconds)}，状态已处理`);
+            toast(`已记录 ${issue.key} 工时并处理状态`);
             setTimeout(() => m.close(), 700);
           } catch (e) {
             log("记录子任务工时失败", e);
