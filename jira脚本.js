@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07.16
+// @version      2026-05-07.18
 // @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
@@ -247,6 +247,27 @@
   const formatDateYmd = (d = new Date()) => {
     const pad = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+  const expandDatePickerHotzone = (el) => {
+    if (!el || el.type !== "date") return el;
+    el.style.cursor = "pointer";
+    const openPicker = () => {
+      if (el.disabled || el.readOnly || typeof el.showPicker !== "function") return false;
+      try {
+        el.focus({ preventScroll: true });
+        el.showPicker();
+        return true;
+      } catch (_) {
+        // Some browsers only allow showPicker from direct user gestures.
+        return false;
+      }
+    };
+    el.addEventListener("click", openPicker);
+    el.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (openPicker()) e.preventDefault();
+    });
+    return el;
   };
   const secondsToHours = (s) => Math.round((Number(s) || 0) / 36) / 100;
   const formatSeconds = (s) => {
@@ -1344,6 +1365,7 @@
             background: "transparent", color: "inherit",
             boxSizing: "border-box", width: "100%",
           });
+          if (type === "date") expandDatePickerHotzone(el);
           return el;
         };
         const makeField = (label, input, hint) => {
@@ -1509,6 +1531,7 @@
             background: "transparent", color: "inherit",
             boxSizing: "border-box", width: "100%",
           });
+          if (type === "date") expandDatePickerHotzone(el);
           return el;
         };
         const makeField = (label, input, hint) => {

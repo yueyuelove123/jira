@@ -233,6 +233,27 @@
     const pad = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
+  const expandDatePickerHotzone = (el) => {
+    if (!el || el.type !== "date") return el;
+    el.style.cursor = "pointer";
+    const openPicker = () => {
+      if (el.disabled || el.readOnly || typeof el.showPicker !== "function") return false;
+      try {
+        el.focus({ preventScroll: true });
+        el.showPicker();
+        return true;
+      } catch (_) {
+        // Some browsers only allow showPicker from direct user gestures.
+        return false;
+      }
+    };
+    el.addEventListener("click", openPicker);
+    el.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (openPicker()) e.preventDefault();
+    });
+    return el;
+  };
   const secondsToHours = (s) => Math.round((Number(s) || 0) / 36) / 100;
   const formatSeconds = (s) => {
     const sec = Math.max(0, Number(s) || 0);
@@ -1329,6 +1350,7 @@
             background: "transparent", color: "inherit",
             boxSizing: "border-box", width: "100%",
           });
+          if (type === "date") expandDatePickerHotzone(el);
           return el;
         };
         const makeField = (label, input, hint) => {
@@ -1494,6 +1516,7 @@
             background: "transparent", color: "inherit",
             boxSizing: "border-box", width: "100%",
           });
+          if (type === "date") expandDatePickerHotzone(el);
           return el;
         };
         const makeField = (label, input, hint) => {
