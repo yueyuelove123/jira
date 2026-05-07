@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07
-// @description  Test Execution 一键报告 + 合并执行 + 子任务工时记录 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
+// @version      2026-05-07.1
+// @description  Test Execution 一键报告 + 合并执行 + 子任务行工时记录 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
 // @match        https://jira.cjdropshipping.cn/secure/XrayReport*
@@ -16,6 +16,9 @@
 /* ==========================
  * 更新记录 / Changelog
  * ==========================
+ * 2026-05-07.1
+ *   - 子任务工时记录入口改为子任务行按钮，点击后只记录当前行子任务，记录日期默认当天且可手动选择
+ * 
  * 2026-05-07
  *   - 新增 Jira 问题页子任务工时一键记录：按子任务剩余预估写入 Tempo 工时，并将剩余预估置为 0
  * 
@@ -128,7 +131,6 @@
     toolbarWrap: "tm-toolbar-wrap",
     btnFloat: "tm-btn-float",
     btnSettings: "tm-btn-settings",
-    btnWorklog: "tm-btn-worklog",
   };
   const ROW_BTN = "tm-row-report-btn";
  
@@ -837,7 +839,6 @@
   const WORKLOG_SETTINGS_KEY = "tm_subtask_worklog_settings_v1";
   const WORKLOG_BTN = "tm-subtask-worklog-btn";
   const WORKLOG_DEFAULTS = {
-    started: formatDateYmd(),
     mode: "remaining",
     hours: "8",
     comment: "",
@@ -846,7 +847,7 @@
     load() {
       let s = {};
       try { s = JSON.parse(localStorage.getItem(WORKLOG_SETTINGS_KEY) || "{}"); } catch {}
-      return { ...WORKLOG_DEFAULTS, ...s, started: s.started || formatDateYmd() };
+      return { ...WORKLOG_DEFAULTS, ...s };
     },
     save(v) {
       try { localStorage.setItem(WORKLOG_SETTINGS_KEY, JSON.stringify(v || {})); } catch {}
@@ -880,6 +881,18 @@
         seen.add(key);
         return true;
       });
+  };
+  const getSubtaskRows = () => {
+    const roots = qsa(
+      'issuetable-web-component[data-content="subtasks"], #subtasks-module, .subtask-table-container'
+    );
+    const seen = new Set();
+    return roots.flatMap((root) => qsa("tr.issuerow[data-issuekey]", root)).filter((tr) => {
+      const key = (tr.getAttribute("data-issuekey") || "").trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   };
   const fetchSubtaskDetails = async (keys) => {
     const uniq = [...new Set((keys || []).map((k) => String(k || "").trim()).filter(Boolean))];
@@ -971,13 +984,17 @@
     }
     return r.json().catch(() => null);
   };
-  const openSubtaskWorklogPanel = async () => {
+  const openSubtaskWorklogPanel = async (issueKey) => {
     if (document.getElementById(IDS.modal)) return;
+    const key = String(issueKey || "").trim();
+    if (!key) {
+      toast("缺少子任务 Key，无法记录工时", true);
+      return;
+    }
     const saved = WorklogSettings.load();
-    let rows = [];
+    let issue = null;
     let worker = null;
-    let statusEl, tableWrap, submitBtn, selectAll;
-    const selectedRows = () => rows.filter((r) => r.checked);
+    let statusEl, submitBtn, cancelBtn;
     const setStatus = (msg, err = false) => {
       if (!statusEl) return;
       statusEl.textContent = msg || "";
@@ -987,28 +1004,12 @@
       });
     };
     const rowSeconds = (row, mode, fixedSeconds) =>
-      mode === "fixed" ? fixedSeconds : Math.max(0, Number(row.remainingSeconds) || 0);
-    const refreshSubmitState = () => {
-      if (!submitBtn) return;
-      submitBtn.disabled = !rows.some((r) => r.checked);
-      if (selectAll) {
-        const checked = rows.filter((r) => r.checked).length;
-        selectAll.checked = rows.length > 0 && checked === rows.length;
-        selectAll.indeterminate = checked > 0 && checked < rows.length;
-      }
-    };
+      mode === "fixed" ? fixedSeconds : Math.max(0, Number(row?.remainingSeconds) || 0);
     const modal = new ReportModal("", {
-      title: "子任务工时记录",
+      title: `记录子任务工时：${key}`,
       bodyBuilder(content, m) {
         content.style.overflow = "auto";
         content.style.gap = "12px";
-        const controls = document.createElement("div");
-        Object.assign(controls.style, {
-          display: "grid",
-          gridTemplateColumns: "minmax(130px, 1fr) minmax(130px, 1fr) minmax(110px, 0.8fr)",
-          gap: "8px",
-          alignItems: "end",
-        });
         const makeInput = (type, value) => {
           const el = document.createElement("input");
           el.type = type;
@@ -1022,18 +1023,57 @@
           });
           return el;
         };
-        const makeField = (label, input) => {
+        const makeField = (label, input, hint) => {
           const wrap = document.createElement("label");
           Object.assign(wrap.style, { display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px", color: "#64748b" });
           const span = document.createElement("span");
           span.textContent = label;
           wrap.appendChild(span);
           wrap.appendChild(input);
+          if (hint) {
+            const h = document.createElement("span");
+            h.textContent = hint;
+            Object.assign(h.style, { color: "#94a3b8", fontSize: "11px" });
+            wrap.appendChild(h);
+          }
           return wrap;
         };
-        const dateInput = makeInput("date", saved.started || formatDateYmd());
+        const info = document.createElement("div");
+        Object.assign(info.style, {
+          border: "1px solid var(--tm-border)",
+          borderRadius: "10px",
+          padding: "10px 12px",
+          display: "grid",
+          gridTemplateColumns: "96px minmax(0, 1fr)",
+          gap: "6px 10px",
+          fontSize: "12px",
+        });
+        const putInfo = (label, value) => {
+          const l = document.createElement("div");
+          l.textContent = label;
+          Object.assign(l.style, { color: "#64748b" });
+          const v = document.createElement("div");
+          v.textContent = value || "-";
+          Object.assign(v.style, { color: "inherit", wordBreak: "break-word" });
+          info.appendChild(l);
+          info.appendChild(v);
+        };
+        putInfo("子任务", key);
+        putInfo("摘要", "正在加载...");
+        putInfo("剩余预估", "-");
+        putInfo("已记录", "-");
+        content.appendChild(info);
+
+        const controls = document.createElement("div");
+        Object.assign(controls.style, {
+          display: "grid",
+          gridTemplateColumns: "minmax(130px, 1fr) minmax(130px, 1fr) minmax(110px, 0.8fr)",
+          gap: "8px",
+          alignItems: "end",
+        });
+        const dateInput = makeInput("date", formatDateYmd());
         const modeSelect = document.createElement("select");
-        modeSelect.innerHTML = '<option value="remaining">按剩余预估</option><option value="fixed">统一指定工时</option>';
+        modeSelect.innerHTML = '<option value="remaining">按剩余预估</option><option value="fixed">手动填写工时</option>';
         modeSelect.value = saved.mode === "fixed" ? "fixed" : "remaining";
         Object.assign(modeSelect.style, {
           height: "32px", padding: "0 10px",
@@ -1042,9 +1082,9 @@
           boxSizing: "border-box", width: "100%",
         });
         const hoursInput = makeInput("text", saved.hours || "8");
-        controls.appendChild(makeField("记录日期", dateInput));
+        controls.appendChild(makeField("记录日期", dateInput, "默认当天，可手动选择"));
         controls.appendChild(makeField("工时来源", modeSelect));
-        controls.appendChild(makeField("指定工时(h)", hoursInput));
+        controls.appendChild(makeField("手动工时(h)", hoursInput, "示例：8、1.5、2h、30m"));
         content.appendChild(controls);
 
         const commentInput = makeInput("text", saved.comment || "");
@@ -1055,97 +1095,27 @@
         setStatus("正在加载子任务和当前用户...");
         content.appendChild(statusEl);
 
-        tableWrap = document.createElement("div");
-        Object.assign(tableWrap.style, {
-          border: "1px solid var(--tm-border)",
-          borderRadius: "10px",
-          overflow: "auto",
-          maxHeight: "46vh",
-        });
-        content.appendChild(tableWrap);
-
-        const renderTable = () => {
-          tableWrap.innerHTML = "";
-          if (!rows.length) {
-            const empty = document.createElement("div");
-            empty.textContent = "未找到子任务";
-            Object.assign(empty.style, { padding: "16px", fontSize: "13px", color: "#64748b" });
-            tableWrap.appendChild(empty);
-            refreshSubmitState();
-            return;
-          }
-          const table = document.createElement("table");
-          Object.assign(table.style, { width: "100%", borderCollapse: "collapse", fontSize: "12px" });
-          const thead = document.createElement("thead");
-          thead.innerHTML = "<tr><th></th><th>子任务</th><th>状态</th><th>经办人</th><th>原预估</th><th>剩余</th><th>已记录</th></tr>";
-          qsa("th", thead).forEach((th) => Object.assign(th.style, {
-            position: "sticky", top: "0", background: "rgba(248,250,252,0.96)",
-            color: "#475569", textAlign: "left", padding: "8px",
-            borderBottom: "1px solid var(--tm-border)", whiteSpace: "nowrap",
-          }));
-          const firstTh = thead.querySelector("th");
-          selectAll = document.createElement("input");
-          selectAll.type = "checkbox";
-          selectAll.onchange = () => {
-            rows.forEach((r) => { r.checked = selectAll.checked; });
-            renderTable();
-          };
-          firstTh.appendChild(selectAll);
-          const tbody = document.createElement("tbody");
-          rows.forEach((row) => {
-            const tr = document.createElement("tr");
-            tr.style.borderBottom = "1px solid rgba(0,0,0,0.06)";
-            const cbTd = document.createElement("td");
-            Object.assign(cbTd.style, { padding: "8px", width: "32px" });
-            const cb = document.createElement("input");
-            cb.type = "checkbox";
-            cb.checked = !!row.checked;
-            cb.onchange = () => { row.checked = cb.checked; refreshSubmitState(); };
-            cbTd.appendChild(cb);
-            const keyTd = document.createElement("td");
-            Object.assign(keyTd.style, { padding: "8px", minWidth: "220px" });
-            const keyLine = document.createElement("div");
-            keyLine.textContent = row.key;
-            Object.assign(keyLine.style, { fontWeight: "600", color: "#2563eb" });
-            const sumLine = document.createElement("div");
-            sumLine.textContent = row.summary || "";
-            Object.assign(sumLine.style, { color: "#64748b", marginTop: "2px", wordBreak: "break-word" });
-            keyTd.appendChild(keyLine);
-            keyTd.appendChild(sumLine);
-            const cells = [
-              cbTd,
-              keyTd,
-              row.status,
-              row.assignee || "-",
-              formatSeconds(row.originalSeconds),
-              formatSeconds(row.remainingSeconds),
-              formatSeconds(row.spentSeconds),
-            ];
-            cells.forEach((val) => {
-              const td = val instanceof Node ? val : document.createElement("td");
-              if (!(val instanceof Node)) td.textContent = val;
-              Object.assign(td.style, { padding: "8px", verticalAlign: "top", whiteSpace: td === keyTd ? "normal" : "nowrap" });
-              tr.appendChild(td);
-            });
-            tbody.appendChild(tr);
-          });
-          table.appendChild(thead);
-          table.appendChild(tbody);
-          tableWrap.appendChild(table);
-          refreshSubmitState();
-        };
-        m.__worklogForm = {
-          dateInput, modeSelect, hoursInput, commentInput,
-          renderTable,
-        };
-        Promise.all([getCurrentWorker(), fetchWorklogCandidates()])
+        m.__worklogForm = { dateInput, modeSelect, hoursInput, commentInput, info };
+        Promise.all([getCurrentWorker(), fetchSubtaskDetails([key])])
           .then(([u, list]) => {
             worker = u;
-            rows = list;
-            rows.forEach((r) => { r.checked = r.remainingSeconds > 0; });
-            renderTable();
-            const picked = rows.filter((r) => r.checked).length;
-            setStatus(`当前用户：${u.displayName}。已加载 ${rows.length} 个子任务，默认选择 ${picked} 个剩余工时大于 0 的子任务。`);
+            issue = list[0] || null;
+            info.innerHTML = "";
+            if (!issue) {
+              putInfo("子任务", key);
+              putInfo("状态", "未找到");
+              setStatus("未能通过 Jira API 获取该子任务详情", true);
+              return;
+            }
+            putInfo("子任务", issue.key);
+            putInfo("摘要", issue.summary);
+            putInfo("状态", issue.status);
+            putInfo("经办人", issue.assignee || "-");
+            putInfo("原预估", formatSeconds(issue.originalSeconds));
+            putInfo("剩余预估", formatSeconds(issue.remainingSeconds));
+            putInfo("已记录", formatSeconds(issue.spentSeconds));
+            setStatus(`当前用户：${u.displayName}。默认记录 ${formatSeconds(issue.remainingSeconds)}，提交后剩余预估置为 0。`);
+            if (submitBtn) submitBtn.disabled = false;
           })
           .catch((e) => {
             log("加载子任务工时失败", e);
@@ -1154,13 +1124,13 @@
           });
       },
       footerBuilder(footer, m) {
-        const cancelBtn = mkBtn("取消", { variant: "ghost", size: "md" });
+        cancelBtn = mkBtn("取消", { variant: "ghost", size: "md" });
         cancelBtn.onclick = () => m.close();
-        submitBtn = mkBtn("记录选中工时", { variant: "primary", size: "md" });
+        submitBtn = mkBtn("记录工时", { variant: "primary", size: "md" });
         submitBtn.disabled = true;
         submitBtn.onclick = async () => {
           const f = m.__worklogForm;
-          if (!f || !worker) return;
+          if (!f || !worker || !issue) return;
           const started = (f.dateInput.value || "").trim();
           if (!/^\d{4}-\d{2}-\d{2}$/.test(started)) {
             setStatus("记录日期格式不正确", true);
@@ -1169,58 +1139,40 @@
           const mode = f.modeSelect.value === "fixed" ? "fixed" : "remaining";
           const fixedSeconds = parseWorkSeconds(f.hoursInput.value);
           if (mode === "fixed" && fixedSeconds <= 0) {
-            setStatus("指定工时必须大于 0", true);
+            setStatus("手动工时必须大于 0", true);
             return;
           }
-          const todo = selectedRows().map((row) => ({
-            row,
-            seconds: rowSeconds(row, mode, fixedSeconds),
-          })).filter((it) => it.seconds > 0);
-          if (!todo.length) {
-            setStatus("没有可记录的工时，按剩余预估时会自动跳过剩余为 0 的子任务", true);
+          const seconds = rowSeconds(issue, mode, fixedSeconds);
+          if (seconds <= 0) {
+            setStatus("当前子任务没有可记录的剩余预估，请切换为手动填写工时", true);
             return;
           }
           WorklogSettings.save({
-            started,
             mode,
             hours: f.hoursInput.value || "",
             comment: f.commentInput.value || "",
           });
           submitBtn.disabled = true;
           cancelBtn.disabled = true;
-          let ok = 0;
-          const failed = [];
-          for (const item of todo) {
-            const { row, seconds } = item;
-            setStatus(`正在记录 ${row.key}：${formatSeconds(seconds)}...`);
-            try {
-              await postTempoWorklog({
-                issue: row,
-                worker: worker.key,
-                started,
-                seconds,
-                remainingEstimate: 0,
-                comment: (f.commentInput.value || "").trim(),
-              });
-              ok++;
-              row.spentSeconds = (Number(row.spentSeconds) || 0) + seconds;
-              row.remainingSeconds = 0;
-              row.checked = false;
-              f.renderTable();
-            } catch (e) {
-              log("记录子任务工时失败", e);
-              failed.push(`${row.key}：${e.message || e}`);
-            }
+          setStatus(`正在记录 ${issue.key}：${formatSeconds(seconds)}...`);
+          try {
+            await postTempoWorklog({
+              issue,
+              worker: worker.key,
+              started,
+              seconds,
+              remainingEstimate: 0,
+              comment: (f.commentInput.value || "").trim(),
+            });
+            setStatus(`已记录 ${issue.key}：${formatSeconds(seconds)}`);
+            toast(`已记录 ${issue.key} 工时`);
+            setTimeout(() => m.close(), 700);
+          } catch (e) {
+            log("记录子任务工时失败", e);
+            setStatus(e.message || "记录失败", true);
+            submitBtn.disabled = false;
+            cancelBtn.disabled = false;
           }
-          cancelBtn.disabled = false;
-          submitBtn.disabled = false;
-          if (failed.length) {
-            setStatus(`完成 ${ok} 个，失败 ${failed.length} 个：${failed.join("；")}`, true);
-          } else {
-            setStatus(`已完成 ${ok} 个子任务工时记录`);
-            toast(`已记录 ${ok} 个子任务工时`);
-          }
-          refreshSubmitState();
         };
         footer.appendChild(cancelBtn);
         footer.appendChild(submitBtn);
@@ -1228,7 +1180,6 @@
     });
     void modal;
   };
-
   /* ========== Portal & dashboard config ========== */
   const DEFAULT_PORTAL = {
     ownerPrefix: "生姜-", pageId: "10923",
@@ -2653,16 +2604,29 @@
     }
     return changed;
   };
-  const ensureWorklogButton = () => {
+  const ensureSubtaskWorklogButtons = () => {
     if (!isJiraIssuePage()) return false;
-    const ops = getOpsBar();
-    if (!ops) return false;
-    const wrap = ensureToolbarWrap(ops);
-    if (!wrap || document.getElementById(IDS.btnWorklog)) return false;
-    const b = mkBtn("记录子任务工时", { variant: "ghost", size: "md", id: IDS.btnWorklog });
-    b.onclick = () => openSubtaskWorklogPanel();
-    wrap.appendChild(b);
-    return true;
+    let changed = false;
+    getSubtaskRows().forEach((tr) => {
+      if (tr.querySelector(`.${WORKLOG_BTN}`)) return;
+      const key = (tr.getAttribute("data-issuekey") || "").trim();
+      if (!key) return;
+      const td = document.createElement("td");
+      td.className = "tm-subtask-worklog-cell";
+      Object.assign(td.style, { padding: "4px 6px", whiteSpace: "nowrap", verticalAlign: "middle" });
+      const b = mkBtn("记工时", { variant: "ghost", size: "sm" });
+      b.classList.add(WORKLOG_BTN);
+      b.title = `记录 ${key} 工时`;
+      b.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openSubtaskWorklogPanel(key);
+      };
+      td.appendChild(b);
+      tr.appendChild(td);
+      changed = true;
+    });
+    return changed;
   };
   const ensureTitleButton = () => {
     if (document.getElementById(IDS.btnTitle) || !isTestExecutionPage()) return false;
@@ -2721,7 +2685,10 @@
   let quickSpin = 0, hbTimer = null, hbLeft = 0;
   const needButtons = () => {
     if (isTestExecutionPage() && countActionBtns() < 2) return true;
-    if (isJiraIssuePage() && !document.getElementById(IDS.btnWorklog)) return true;
+    if (isJiraIssuePage()) {
+      const rows = getSubtaskRows();
+      if (rows.length && rows.some((tr) => !tr.querySelector(`.${WORKLOG_BTN}`))) return true;
+    }
     if (isXrayReportListPage()) {
       const table = qs(SEL.reportTable);
       if (!table) return true;
@@ -2736,7 +2703,7 @@
       changed = ensureTitleButton() || changed;
       ensureFloatButton();
     }
-    if (isJiraIssuePage()) changed = ensureWorklogButton() || changed;
+    if (isJiraIssuePage()) changed = ensureSubtaskWorklogButtons() || changed;
     if (isXrayReportListPage()) changed = ensureReportListButtons() || changed;
     if (countActionBtns() >= 2) {
       const fb = document.getElementById(IDS.btnFloat);
