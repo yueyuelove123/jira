@@ -1516,31 +1516,95 @@
           border: "1px solid var(--tm-border)",
           borderRadius: "10px",
           padding: "10px 12px",
-          display: "grid",
-          gridTemplateColumns: "96px minmax(0, 1fr)",
-          gap: "6px 10px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
           fontSize: "12px",
         });
-        const putInfo = (label, value) => {
-          const l = document.createElement("div");
-          l.textContent = label;
-          Object.assign(l.style, { color: "#64748b" });
-          const v = document.createElement("div");
-          v.textContent = value || "-";
-          Object.assign(v.style, { color: "inherit", wordBreak: "break-word" });
-          info.appendChild(l);
-          info.appendChild(v);
+        const renderInfo = ({
+          issueKey = key,
+          summary = "正在加载...",
+          status = "加载中",
+          assignee = "-",
+          original = "-",
+          remaining = "-",
+          spent = "-",
+        } = {}) => {
+          info.innerHTML = "";
+          const head = document.createElement("div");
+          Object.assign(head.style, {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "10px",
+          });
+          const issueTitle = document.createElement("div");
+          issueTitle.textContent = issueKey || key;
+          Object.assign(issueTitle.style, { fontWeight: "600", color: "inherit" });
+          const statusPill = document.createElement("span");
+          statusPill.textContent = status || "-";
+          Object.assign(statusPill.style, {
+            flex: "0 0 auto",
+            padding: "2px 8px",
+            borderRadius: "999px",
+            background: "rgba(37,99,235,0.08)",
+            color: "#2563eb",
+            fontSize: "12px",
+          });
+          head.appendChild(issueTitle);
+          head.appendChild(statusPill);
+          const summaryEl = document.createElement("div");
+          summaryEl.textContent = summary || "-";
+          Object.assign(summaryEl.style, {
+            color: "inherit",
+            wordBreak: "break-word",
+            lineHeight: "18px",
+          });
+          const meta = document.createElement("div");
+          Object.assign(meta.style, {
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))",
+            gap: "6px",
+          });
+          const putMeta = (label, value) => {
+            const item = document.createElement("div");
+            Object.assign(item.style, {
+              border: "1px solid rgba(148,163,184,0.35)",
+              borderRadius: "8px",
+              padding: "6px 8px",
+              minWidth: "0",
+            });
+            const l = document.createElement("div");
+            l.textContent = label;
+            Object.assign(l.style, { color: "#64748b", fontSize: "11px" });
+            const v = document.createElement("div");
+            v.textContent = value || "-";
+            Object.assign(v.style, {
+              color: "inherit",
+              fontWeight: "600",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            });
+            item.appendChild(l);
+            item.appendChild(v);
+            meta.appendChild(item);
+          };
+          putMeta("经办人", assignee);
+          putMeta("原预估", original);
+          putMeta("剩余预估", remaining);
+          putMeta("已记录", spent);
+          info.appendChild(head);
+          info.appendChild(summaryEl);
+          info.appendChild(meta);
         };
-        putInfo("子任务", key);
-        putInfo("摘要", "正在加载...");
-        putInfo("剩余预估", "-");
-        putInfo("已记录", "-");
+        renderInfo();
         content.appendChild(info);
 
         const controls = document.createElement("div");
         Object.assign(controls.style, {
           display: "grid",
-          gridTemplateColumns: "minmax(130px, 1fr) minmax(130px, 1fr) minmax(110px, 0.8fr)",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           gap: "8px",
           alignItems: "end",
         });
@@ -1555,9 +1619,15 @@
           boxSizing: "border-box", width: "100%",
         });
         const hoursInput = makeInput("text", "8");
+        const hoursField = makeField("手动工时(h)", hoursInput, "示例：8、1.5、2h、30m");
+        const updateHoursVisibility = () => {
+          hoursField.style.display = modeSelect.value === "fixed" ? "flex" : "none";
+        };
+        modeSelect.onchange = updateHoursVisibility;
         controls.appendChild(makeField("记录日期", dateInput, "默认当天，可手动选择"));
         controls.appendChild(makeField("工时来源", modeSelect));
-        controls.appendChild(makeField("手动工时(h)", hoursInput, "示例：8、1.5、2h、30m"));
+        controls.appendChild(hoursField);
+        updateHoursVisibility();
         content.appendChild(controls);
 
         const commentInput = makeInput("text", "");
@@ -1573,21 +1643,29 @@
           .then(([u, list]) => {
             worker = u;
             issue = list[0] || null;
-            info.innerHTML = "";
             if (!issue) {
-              putInfo("子任务", key);
-              putInfo("状态", "未找到");
+              renderInfo({ issueKey: key, summary: "未找到该子任务", status: "未找到" });
               setStatus("未能通过 Jira API 获取该子任务详情", true);
               return;
             }
-            putInfo("子任务", issue.key);
-            putInfo("摘要", issue.summary);
-            putInfo("状态", issue.status);
-            putInfo("经办人", issue.assignee || "-");
-            putInfo("原预估", formatSeconds(issue.originalSeconds));
-            putInfo("剩余预估", formatSeconds(issue.remainingSeconds));
-            putInfo("已记录", formatSeconds(issue.spentSeconds));
-            setStatus(`当前用户：${u.displayName}。默认记录 ${formatSeconds(issue.remainingSeconds)}，提交后剩余预估置为 0。`);
+            renderInfo({
+              issueKey: issue.key,
+              summary: issue.summary,
+              status: issue.status || "-",
+              assignee: issue.assignee || "-",
+              original: formatSeconds(issue.originalSeconds),
+              remaining: formatSeconds(issue.remainingSeconds),
+              spent: formatSeconds(issue.spentSeconds),
+            });
+            if (issue.remainingSeconds <= 0) {
+              modeSelect.value = "fixed";
+              updateHoursVisibility();
+              setStatus(`当前用户：${u.displayName}。当前无剩余预估，已切换为手动填写工时，提交后剩余预估置为 0。`);
+            } else {
+              modeSelect.value = "remaining";
+              updateHoursVisibility();
+              setStatus(`当前用户：${u.displayName}。默认记录 ${formatSeconds(issue.remainingSeconds)}，提交后剩余预估置为 0。`);
+            }
             if (submitBtn) submitBtn.disabled = false;
           })
           .catch((e) => {
