@@ -844,23 +844,7 @@
     });
 
   /* ========== Tempo worklog ========== */
-  const WORKLOG_SETTINGS_KEY = "tm_subtask_worklog_settings_v1";
   const WORKLOG_BTN = "tm-subtask-worklog-btn";
-  const WORKLOG_DEFAULTS = {
-    mode: "remaining",
-    hours: "8",
-    comment: "",
-  };
-  const WorklogSettings = {
-    load() {
-      let s = {};
-      try { s = JSON.parse(localStorage.getItem(WORKLOG_SETTINGS_KEY) || "{}"); } catch {}
-      return { ...WORKLOG_DEFAULTS, ...s };
-    },
-    save(v) {
-      try { localStorage.setItem(WORKLOG_SETTINGS_KEY, JSON.stringify(v || {})); } catch {}
-    },
-  };
   const isJiraIssuePage = () => /^\/browse\/[A-Z][A-Z0-9_]+-\d+/i.test(location.pathname);
   const getCurrentWorker = async () => {
     const r = await fetch("/rest/api/2/myself", {
@@ -1121,18 +1105,7 @@
   };
 
   /* ========== Subtask create ========== */
-  const CREATE_SUBTASK_SETTINGS_KEY = "tm_create_subtask_settings_v1";
   const SUBTASK_ISSUE_TYPE_ID = "10104";
-  const CreateSubtaskSettings = {
-    load() {
-      let s = {};
-      try { s = JSON.parse(localStorage.getItem(CREATE_SUBTASK_SETTINGS_KEY) || "{}"); } catch {}
-      return { hours: "0.5h", started: formatDateYmd(), ...s };
-    },
-    save(v) {
-      try { localStorage.setItem(CREATE_SUBTASK_SETTINGS_KEY, JSON.stringify(v || {})); } catch {}
-    },
-  };
   const fetchCurrentIssueContextForSubtask = async () => {
     const key = getCurrentIssueKey();
     if (!key) throw new Error("缺少当前问题 Key，无法创建子任务");
@@ -1312,7 +1285,6 @@
   };
   const openCreateSubtaskPanel = () => {
     if (document.getElementById(IDS.modal)) return;
-    const saved = CreateSubtaskSettings.load();
     let context = null;
     let worker = null;
     let statusEl, submitBtn, cancelBtn, info;
@@ -1397,8 +1369,8 @@
           gap: "8px",
           alignItems: "end",
         });
-        const startedInput = makeInput("date", saved.started || formatDateYmd());
-        const hoursInput = makeInput("text", saved.hours || "0.5h");
+        const startedInput = makeInput("date", formatDateYmd());
+        const hoursInput = makeInput("text", "0.5h");
         controls.appendChild(makeField("记录日期", startedInput, "默认当天，可手动选择"));
         controls.appendChild(makeField("预估工时", hoursInput, "支持 0.5h、0.5、4h、30m 写法"));
         content.appendChild(controls);
@@ -1454,10 +1426,6 @@
             setStatus("记录工时必须大于 0", true);
             return;
           }
-          CreateSubtaskSettings.save({
-            hours: f.hoursInput.value || "",
-            started,
-          });
           submitBtn.disabled = true;
           cancelBtn.disabled = true;
           setStatus("正在创建子任务...");
@@ -1497,7 +1465,6 @@
       toast("缺少子任务 Key，无法记录工时", true);
       return;
     }
-    const saved = WorklogSettings.load();
     let issue = null;
     let worker = null;
     let statusEl, submitBtn, cancelBtn;
@@ -1580,20 +1547,20 @@
         const dateInput = makeInput("date", formatDateYmd());
         const modeSelect = document.createElement("select");
         modeSelect.innerHTML = '<option value="remaining">按剩余预估</option><option value="fixed">手动填写工时</option>';
-        modeSelect.value = saved.mode === "fixed" ? "fixed" : "remaining";
+        modeSelect.value = "remaining";
         Object.assign(modeSelect.style, {
           height: "32px", padding: "0 10px",
           border: "1px solid var(--tm-border)", borderRadius: "8px",
           background: "transparent", color: "inherit", fontSize: "12px",
           boxSizing: "border-box", width: "100%",
         });
-        const hoursInput = makeInput("text", saved.hours || "8");
+        const hoursInput = makeInput("text", "8");
         controls.appendChild(makeField("记录日期", dateInput, "默认当天，可手动选择"));
         controls.appendChild(makeField("工时来源", modeSelect));
         controls.appendChild(makeField("手动工时(h)", hoursInput, "示例：8、1.5、2h、30m"));
         content.appendChild(controls);
 
-        const commentInput = makeInput("text", saved.comment || "");
+        const commentInput = makeInput("text", "");
         commentInput.placeholder = "可选：默认留空，Tempo 会生成“处理问题KEY”";
         content.appendChild(makeField("说明", commentInput));
 
@@ -1653,11 +1620,6 @@
             setStatus("当前子任务没有可记录的剩余预估，请切换为手动填写工时", true);
             return;
           }
-          WorklogSettings.save({
-            mode,
-            hours: f.hoursInput.value || "",
-            comment: f.commentInput.value || "",
-          });
           submitBtn.disabled = true;
           cancelBtn.disabled = true;
           try {
