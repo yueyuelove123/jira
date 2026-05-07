@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07.7
+// @version      2026-05-07.8
 // @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
@@ -16,6 +16,9 @@
 /* ==========================
  * 更新记录 / Changelog
  * ==========================
+ * 2026-05-07.8
+ *   - 修复 Jira 问题页按钮挂载到右上角导致漂移的问题；创建子任务弹窗新增记录日期选择
+ * 
  * 2026-05-07.7
  *   - 移除标题旁“生成报告”按钮，增强首次进入 Jira 问题页时工具栏按钮挂载稳定性
  * 
@@ -27,9 +30,6 @@
  * 
  * 2026-05-07.4
  *   - 创建测试子任务后自动按填写工时记录 Tempo 工时，并自动完成 Start Progress / Done 状态流转；仍保留子任务行手动记工时入口
- * 
- * 2026-05-07.3
- *   - 新增 Jira 问题页一键创建测试子任务：标题和工时手动填写，修复版本取当前任务，经办人取当前登录用户
  * ========================== */
  
 (() => {
@@ -97,7 +97,7 @@
     issueSummary:
       '#summary-val, h1#summary-val, h1[data-test-id="issue.views.issue-base.foundation.summary.heading"]',
     opsBar:
-      '.command-bar .aui-toolbar2-primary, .command-bar .ops-menus, .command-bar, #opsbar-operations, #opsbar-operations_more, #opsbar-opsbar-operations, #opsbar-opsbar-transitions, .aui-page-header-actions, [data-test-id="issue.issue-view.views.issue-base.foundation.quick-add.quick-add"], [data-test-id="issue.opsbar"]',
+      '.command-bar .aui-toolbar2-primary, .command-bar .ops-menus, .command-bar, #opsbar-operations, #opsbar-operations_more, #opsbar-opsbar-operations, #opsbar-opsbar-transitions, [data-test-id="issue.issue-view.views.issue-base.foundation.quick-add.quick-add"], [data-test-id="issue.opsbar"]',
     typeVal: "#type-val",
     progressBar: "#exec-tests-progressbar",
     fixVer: "#fixVersions-field a",
@@ -1158,7 +1158,7 @@
     load() {
       let s = {};
       try { s = JSON.parse(localStorage.getItem(CREATE_SUBTASK_SETTINGS_KEY) || "{}"); } catch {}
-      return { hours: "0.5h", ...s };
+      return { hours: "0.5h", started: formatDateYmd(), ...s };
     },
     save(v) {
       try { localStorage.setItem(CREATE_SUBTASK_SETTINGS_KEY, JSON.stringify(v || {})); } catch {}
@@ -1421,13 +1421,23 @@
         const summaryInput = makeInput("text", "");
         summaryInput.placeholder = "请输入子任务标题";
         content.appendChild(makeField("标题", summaryInput));
+        const controls = document.createElement("div");
+        Object.assign(controls.style, {
+          display: "grid",
+          gridTemplateColumns: "minmax(130px, 1fr) minmax(130px, 1fr)",
+          gap: "8px",
+          alignItems: "end",
+        });
+        const startedInput = makeInput("date", saved.started || formatDateYmd());
         const hoursInput = makeInput("text", saved.hours || "0.5h");
-        content.appendChild(makeField("预估工时", hoursInput, "支持 0.5h、0.5、4h、30m 写法"));
+        controls.appendChild(makeField("记录日期", startedInput, "默认当天，可手动选择"));
+        controls.appendChild(makeField("预估工时", hoursInput, "支持 0.5h、0.5、4h、30m 写法"));
+        content.appendChild(controls);
 
         statusEl = document.createElement("div");
         setStatus("正在加载当前任务修复版本和登录用户...");
         content.appendChild(statusEl);
-        m.__createSubtaskForm = { summaryInput, hoursInput };
+        m.__createSubtaskForm = { summaryInput, startedInput, hoursInput };
         Promise.all([fetchCurrentIssueContextForSubtask(), getCurrentWorker()])
           .then(([ctx, u]) => {
             context = ctx;
@@ -1456,10 +1466,15 @@
           const f = m.__createSubtaskForm;
           if (!f || !context || !worker) return;
           const summary = (f.summaryInput.value || "").trim();
+          const started = (f.startedInput.value || "").trim();
           const estimate = normalizeWorkEstimate(f.hoursInput.value);
           const seconds = parseWorkSeconds(f.hoursInput.value);
           if (!summary) {
             setStatus("标题不能为空", true);
+            return;
+          }
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(started)) {
+            setStatus("记录日期格式不正确", true);
             return;
           }
           if (!estimate) {
@@ -1472,6 +1487,7 @@
           }
           CreateSubtaskSettings.save({
             hours: f.hoursInput.value || "",
+            started,
           });
           submitBtn.disabled = true;
           cancelBtn.disabled = true;
@@ -1484,7 +1500,7 @@
             await recordIssueWorklogAndDone({
               issue: createdIssue,
               worker: worker.key,
-              started: formatDateYmd(),
+              started,
               seconds,
               comment: "",
               setStatus,
