@@ -60,6 +60,7 @@
     if (id) b.id = id;
     return b;
   };
+  const TM_INPUT_HEIGHT = "32px";
  
   /* ========== Selectors & IDs ========== */
   const SEL = {
@@ -1329,12 +1330,13 @@
     if (document.getElementById(IDS.modal)) return;
     let context = null;
     let worker = null;
-    let statusEl, submitBtn, cancelBtn, addSubtaskBtn, info;
+    let statusEl, submitBtn, createOnlyBtn, cancelBtn, addSubtaskBtn, info;
     let setFormDisabled = null;
     const canSubmit = () => !!(context?.fixVersionId && worker);
     const setProcessing = (processing) => {
       setFormDisabled?.(processing);
       if (submitBtn) submitBtn.disabled = processing || !canSubmit();
+      if (createOnlyBtn) createOnlyBtn.disabled = processing || !canSubmit();
       if (cancelBtn) cancelBtn.disabled = processing;
       if (addSubtaskBtn) addSubtaskBtn.disabled = processing;
     };
@@ -1386,7 +1388,7 @@
           el.type = type;
           el.value = value || "";
           Object.assign(el.style, {
-            height: "32px", padding: "0 10px",
+            height: TM_INPUT_HEIGHT, minHeight: TM_INPUT_HEIGHT, lineHeight: TM_INPUT_HEIGHT, padding: "0 10px",
             border: "1px solid var(--tm-border)", borderRadius: "8px",
             outline: "none", fontSize: "12px",
             background: "transparent", color: "inherit",
@@ -1439,7 +1441,7 @@
           hoursInput.placeholder = "0.5h";
           const removeBtn = mkBtn("删除", { variant: "ghost", size: "sm" });
           Object.assign(removeBtn.style, {
-            height: "32px",
+            height: TM_INPUT_HEIGHT,
             padding: "0 8px",
             alignSelf: "end",
           });
@@ -1549,7 +1551,7 @@
         };
 
         m.__addCreateSubtaskRow = () => addSubtaskRow({ focus: true });
-        m.__getCreateSubtaskPayload = () => {
+        m.__getCreateSubtaskPayload = ({ requireWorklogs = true } = {}) => {
           const subtasks = m.__createSubtaskRows || [];
           if (!subtasks.length) throw new Error("至少需要一个子任务");
           return subtasks.map((subtask, i) => {
@@ -1559,18 +1561,20 @@
               const started = (row.startedInput.value || "").trim();
               const rawHours = (row.hoursInput.value || "").trim();
               const seconds = parseWorkSeconds(rawHours);
-              if (!/^\d{4}-\d{2}-\d{2}$/.test(started)) {
-                throw new Error(`子任务 ${i + 1} 第 ${j + 1} 条记录日期格式不正确`);
+              if (requireWorklogs) {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(started)) {
+                  throw new Error(`子任务 ${i + 1} 第 ${j + 1} 条记录日期格式不正确`);
+                }
+                if (seconds <= 0) {
+                  throw new Error(`子任务 ${i + 1} 第 ${j + 1} 条工时格式不正确，请填写 0.5h、0.5、4h 或 30m`);
+                }
               }
-              if (seconds <= 0) {
-                throw new Error(`子任务 ${i + 1} 第 ${j + 1} 条工时格式不正确，请填写 0.5h、0.5、4h 或 30m`);
-              }
-              return { started, seconds };
-            });
+              return requireWorklogs ? { started, seconds } : { seconds };
+            }).filter((row) => requireWorklogs || row.seconds > 0);
             const totalSeconds = worklogs.reduce((sum, row) => sum + row.seconds, 0);
             return {
               summary,
-              estimate: formatSeconds(totalSeconds),
+              estimate: totalSeconds > 0 ? formatSeconds(totalSeconds) : "0.5h",
               totalSeconds,
               worklogs,
             };
@@ -1598,6 +1602,7 @@
             renderInfo();
             setStatus(e.message || "加载失败", true);
             if (submitBtn) submitBtn.disabled = true;
+            if (createOnlyBtn) createOnlyBtn.disabled = true;
           });
       },
       footerBuilder(footer, m) {
@@ -1606,6 +1611,41 @@
         addSubtaskBtn.onclick = () => m.__addCreateSubtaskRow?.();
         cancelBtn = mkBtn("取消", { variant: "ghost", size: "md" });
         cancelBtn.onclick = () => m.close();
+        createOnlyBtn = mkBtn("只创建子任务", { variant: "ghost", size: "md" });
+        createOnlyBtn.disabled = true;
+        createOnlyBtn.onclick = async () => {
+          if (!context || !worker) return;
+          let tasks = [];
+          try {
+            tasks = m.__getCreateSubtaskPayload?.({ requireWorklogs: false }) || [];
+          } catch (e) {
+            setStatus(e.message || "填写内容不完整", true);
+            return;
+          }
+          setProcessing(true);
+          setStatus(`正在创建 ${tasks.length} 个子任务...`);
+          try {
+            const createdKeys = [];
+            for (let i = 0; i < tasks.length; i++) {
+              const task = tasks[i];
+              setStatus(`正在创建子任务 ${i + 1}/${tasks.length}...`);
+              const created = await postCreateSubtask({
+                context,
+                worker,
+                summary: task.summary,
+                estimate: task.estimate,
+              });
+              createdKeys.push(created.key || `第 ${i + 1} 个`);
+            }
+            setStatus(`已创建 ${createdKeys.length} 个子任务，正在刷新页面...`);
+            toast(`已创建 ${createdKeys.length} 个子任务`);
+            setTimeout(() => location.reload(), 900);
+          } catch (e) {
+            log("只创建子任务失败", e);
+            setStatus(e.message || "创建失败", true);
+            setProcessing(false);
+          }
+        };
         submitBtn = mkBtn("创建并记工时", { variant: "primary", size: "md" });
         submitBtn.disabled = true;
         submitBtn.onclick = async () => {
@@ -1655,6 +1695,7 @@
         };
         footer.appendChild(addSubtaskBtn);
         footer.appendChild(cancelBtn);
+        footer.appendChild(createOnlyBtn);
         footer.appendChild(submitBtn);
       },
     });
@@ -1690,7 +1731,7 @@
           el.type = type;
           el.value = value || "";
           Object.assign(el.style, {
-            height: "32px", padding: "0 10px",
+            height: TM_INPUT_HEIGHT, minHeight: TM_INPUT_HEIGHT, lineHeight: TM_INPUT_HEIGHT, padding: "0 10px",
             border: "1px solid var(--tm-border)", borderRadius: "8px",
             outline: "none", fontSize: "12px",
             background: "transparent", color: "inherit",
@@ -1816,7 +1857,7 @@
         modeSelect.innerHTML = '<option value="remaining">按剩余预估</option><option value="fixed">手动填写工时</option>';
         modeSelect.value = "remaining";
         Object.assign(modeSelect.style, {
-          height: "32px", padding: "0 10px",
+          height: TM_INPUT_HEIGHT, minHeight: TM_INPUT_HEIGHT, lineHeight: TM_INPUT_HEIGHT, padding: "0 10px",
           border: "1px solid var(--tm-border)", borderRadius: "8px",
           background: "transparent", color: "inherit", fontSize: "12px",
           boxSizing: "border-box", width: "100%",
@@ -2348,7 +2389,7 @@
       el.value = val == null ? "" : String(val);
       if (ph) el.placeholder = ph;
       Object.assign(el.style, {
-        height: "30px", padding: "0 10px",
+        height: TM_INPUT_HEIGHT, minHeight: TM_INPUT_HEIGHT, lineHeight: TM_INPUT_HEIGHT, padding: "0 10px",
         border: "1px solid var(--tm-border)", borderRadius: "8px",
         outline: "none", fontSize: "12px",
         background: "transparent", color: "inherit",
