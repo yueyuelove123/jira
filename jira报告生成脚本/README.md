@@ -1,47 +1,53 @@
-# Jira 测试报告生成器 — Chrome 扩展
+# Jira 测试报告生成器
 
-由油猴脚本 `jira脚本.js` 转换得到的 Chrome 扩展（Manifest V3），功能与原脚本完全一致：
+这是 `jira脚本.js` 的 Chrome 扩展版本，适用于 Jira 问题页和 Xray Test Execution 页面。扩展主体逻辑与油猴脚本保持一致，方便在不安装 Tampermonkey 的环境中使用。
 
-- Test Execution 一键报告 + 合并执行
-- Jira 问题页一键创建测试子任务：标题和工时手动填写，修复版本取当前任务，经办人取当前登录用户，创建后自动记工时并完成状态
-- Jira 问题页子任务行工时一键记录，并自动处理 Start Progress / Done 状态流转
-- 报障人候选勾选 / 自定义
-- 测试小结按 Test Execution 工单缓存，用户清空输入时才删除缓存
-- 已执行统计开关（含/不含阻塞、执行中）
-- 仪表盘配置 + 4 宫格缺陷分布截图
-- 截图预览、复制到剪贴板、自动下载兜底
-- Xray 报告列表页每行「生成报告」按钮
-- 设置面板（候选报障人、门户标题前缀、pageId / boardId / gadget IDs、共享组）
-- `Alt + R` 快捷键唤起报告生成
+更新记录见：[CHANGELOG.md](https://github.com/yueyuelove123/--/blob/main/CHANGELOG.md)
+
+## 主要功能
+
+- 创建测试子任务并自动记录工时：在 Jira 问题页点击「创建子任务」，填写标题、记录日期和预估工时，脚本会自动创建子任务、记录 Tempo 工时，并完成 Start Progress / Done 状态流转。
+- 子任务行手动记工时：每个子任务行都有「记工时」按钮，可按剩余预估或手动工时记录，支持自选记录日期。
+- 工时格式兼容：支持 `0.5h`、`0.5`、`4h`、`30m` 等写法。
+- 测试小结缓存：Test Execution 报告弹窗里的测试小结会按工单缓存，关闭弹窗后不丢失；用户清空输入时才删除缓存。
+- 一键生成测试报告：读取 Test Execution 用例总数、执行进度、通过率、失败 / 阻塞 / 执行中数量，并生成可复制报告文本。
+- 合并多个测试执行：可加载同一修复版本下的其他 Test Execution，勾选后合并生成多段报告。
+- 报障人筛选：支持自动采集报障人，也可从候选人中勾选或手动添加，用于缺陷统计和仪表盘筛选。
+- 已执行统计开关：可切换“已执行”是否包含阻塞和执行中用例。
+- 仪表盘配置：自动创建 Jira 筛选器，更新门户标题，并同步 4 个缺陷分布 gadget。
+- 仪表盘截图：生成 4 宫格缺陷分布图，支持预览、复制到剪贴板；剪贴板不可用时自动下载 PNG。
+- Xray 报告列表增强：在 Test Execution 报告列表每行追加「生成报告」按钮，新标签打开后自动生成报告。
+- 设置面板：可配置候选报障人、门户标题前缀、pageId / boardId / gadget IDs、共享组等。
+- 快捷键：在 Test Execution 页面按 `Alt + R` 打开报告弹窗。
+
+## 使用入口
+
+- Jira 问题页：工具栏显示「创建子任务」，子任务列表行显示「记工时」。
+- Test Execution 页面：工具栏显示「生成测试报告」「配置仪表盘」「设置」，也可按 `Alt + R`。
+- Xray Test Execution 报告列表页：每行显示「生成报告」。
+- Chrome 扩展图标：点击后等价于 `Alt + R`；如果当前不是 Test Execution 页面，则打开设置面板。
 
 ## 安装
 
-1. 打开 Chrome，地址栏访问 `chrome://extensions/`
-2. 右上角开启「开发者模式」
-3. 点击「加载已解压的扩展程序」
-4. 选择本目录 `chrome-extension/`
-5. 访问 `https://jira.cjdropshipping.cn/browse/<ISSUE-KEY>` 或 Xray 报告页即可使用
+1. 打开 Chrome，访问 `chrome://extensions/`。
+2. 开启右上角「开发者模式」。
+3. 点击「加载已解压的扩展程序」。
+4. 选择 `jira报告生成脚本/` 目录。
+5. 访问 `https://jira.cjdropshipping.cn/browse/<ISSUE-KEY>` 或 Xray 报告页使用。
 
-## 使用
+## 文件说明
 
-- 在 Test Execution 工单页：自动注入工具栏，或按 `Alt + R`
-- 在 Jira 问题页：工具栏出现「创建子任务」按钮，可填写标题、记录日期和预估工时（支持 0.5h、0.5、30m），提交后自动记录工时并处理 Start Progress / Done
-- 在 Xray 报告列表页：每行末尾出现「生成报告」按钮
-- 点击 Chrome 工具栏的扩展图标（J）：等价于 `Alt + R`，未在 Test Execution 页时打开设置面板
-
-## 文件结构
-
-```
-chrome-extension/
-├── manifest.json   # MV3 清单（content script 注入 MAIN world）
-├── background.js   # action 图标点击 -> 调用页面内 __tm_generateReport
-├── content.js      # 主体逻辑（与油猴脚本 IIFE 一致）
-├── icons/          # 16/32/48/128 占位图标
-└── README.md
+```text
+jira报告生成脚本/
+├── manifest.json   # Chrome MV3 清单
+├── background.js   # 扩展图标点击逻辑
+├── content.js      # 主体逻辑，与 jira脚本.js 的 IIFE 同步
+├── icons/          # 扩展图标
+└── README.md       # 功能说明
 ```
 
-## 与油猴脚本的差异
+## 与油猴脚本的关系
 
-- 移除了 `==UserScript==` 元数据块；`@grant none` 等价于 `world: "MAIN"` 的 content script
-- 新增 `background.js`：扩展图标点击调用主世界的 `window.__tm_generateReport()`
-- 行为、选择器、API 调用、localStorage key 全部保持一致，可与油猴版本互换数据
+- `jira脚本.js` 是油猴脚本版本。
+- `jira报告生成脚本/content.js` 是扩展版本主体逻辑，保持与 `jira脚本.js` 的 IIFE 部分一致。
+- `manifest.json` 使用 `world: "MAIN"` 注入页面主世界，以保持与 `@grant none` 油猴脚本一致的运行环境。
