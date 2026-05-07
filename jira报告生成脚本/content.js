@@ -1604,9 +1604,9 @@
         const controls = document.createElement("div");
         Object.assign(controls.style, {
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
           gap: "8px",
-          alignItems: "end",
+          alignItems: "start",
         });
         const dateInput = makeInput("date", formatDateYmd());
         const modeSelect = document.createElement("select");
@@ -1619,15 +1619,9 @@
           boxSizing: "border-box", width: "100%",
         });
         const hoursInput = makeInput("text", "8");
-        const hoursField = makeField("手动工时(h)", hoursInput, "示例：8、1.5、2h、30m");
-        const updateHoursVisibility = () => {
-          hoursField.style.display = modeSelect.value === "fixed" ? "flex" : "none";
-        };
-        modeSelect.onchange = updateHoursVisibility;
         controls.appendChild(makeField("记录日期", dateInput, "默认当天，可手动选择"));
         controls.appendChild(makeField("工时来源", modeSelect));
-        controls.appendChild(hoursField);
-        updateHoursVisibility();
+        controls.appendChild(makeField("手动工时(h)", hoursInput, "示例：8、1.5、2h、30m"));
         content.appendChild(controls);
 
         const commentInput = makeInput("text", "");
@@ -1659,11 +1653,9 @@
             });
             if (issue.remainingSeconds <= 0) {
               modeSelect.value = "fixed";
-              updateHoursVisibility();
               setStatus(`当前用户：${u.displayName}。当前无剩余预估，已切换为手动填写工时，提交后剩余预估置为 0。`);
             } else {
               modeSelect.value = "remaining";
-              updateHoursVisibility();
               setStatus(`当前用户：${u.displayName}。默认记录 ${formatSeconds(issue.remainingSeconds)}，提交后剩余预估置为 0。`);
             }
             if (submitBtn) submitBtn.disabled = false;
