@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Jira 测试报告生成器",
+  "version": "2026.5.7",
+  "description": "Test Execution 一键报告 + 合并执行 + 子任务工时记录 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮",
+  "author": "shengjiang",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Jira 测试报告生成器（Alt+R 唤起）",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://jira.cjdropshipping.cn/browse/*",
+        "https://jira.cjdropshipping.cn/secure/XrayReport*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    }
+  ],
+  "permissions": ["scripting"],
+  "host_permissions": [
+    "https://jira.cjdropshipping.cn/*"
+  ]
+}
