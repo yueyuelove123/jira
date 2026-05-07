@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-05-07.11
+
+- 远端仓库更名并公开后，更新脚本主页和 Changelog 链接为 `https://github.com/yueyuelove123/jira`。
+
 ## 2026-05-07.10
 
 - 将脚本头部更新记录迁移到独立 `CHANGELOG.md`，脚本内改为 GitHub 更新记录链接。

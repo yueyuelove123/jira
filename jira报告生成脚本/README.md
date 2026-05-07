@@ -2,7 +2,7 @@
 
 这是 `jira脚本.js` 的 Chrome 扩展版本，适用于 Jira 问题页和 Xray Test Execution 页面。扩展主体逻辑与油猴脚本保持一致，方便在不安装 Tampermonkey 的环境中使用。
 
-更新记录见：[CHANGELOG.md](https://github.com/yueyuelove123/--/blob/main/CHANGELOG.md)
+更新记录见：[CHANGELOG.md](https://github.com/yueyuelove123/jira/blob/main/CHANGELOG.md)
 
 ## 主要功能
 

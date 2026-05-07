@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07.10
+// @version      2026-05-07.11
 // @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
@@ -11,10 +11,10 @@
 // @license      MIT
 // @downloadURL https://update.greasyfork.org/scripts/575343/Jira%E6%B5%8B%E8%AF%95%E6%8A%A5%E5%91%8A%E7%94%9F%E6%88%90%E5%99%A8.user.js
 // @updateURL https://update.greasyfork.org/scripts/575343/Jira%E6%B5%8B%E8%AF%95%E6%8A%A5%E5%91%8A%E7%94%9F%E6%88%90%E5%99%A8.meta.js
-// @homepageURL https://github.com/yueyuelove123/--
+// @homepageURL https://github.com/yueyuelove123/jira
 // ==/UserScript==
 
-// 更新记录 / Changelog: https://github.com/yueyuelove123/--/blob/main/CHANGELOG.md
+// 更新记录 / Changelog: https://github.com/yueyuelove123/jira/blob/main/CHANGELOG.md
  
 (() => {
   "use strict";
