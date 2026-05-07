@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07.8
+// @version      2026-05-07.9
 // @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
@@ -16,6 +16,9 @@
 /* ==========================
  * 更新记录 / Changelog
  * ==========================
+ * 2026-05-07.9
+ *   - 修复首次进入 Jira 问题页时按钮可能挂载到隐藏工具栏导致不可见的问题
+ * 
  * 2026-05-07.8
  *   - 修复 Jira 问题页按钮挂载到右上角导致漂移的问题；创建子任务弹窗新增记录日期选择
  * 
@@ -28,8 +31,6 @@
  * 2026-05-07.5
  *   - 测试小结按 Test Execution 工单缓存，用户清空输入时才删除缓存
  * 
- * 2026-05-07.4
- *   - 创建测试子任务后自动按填写工时记录 Tempo 工时，并自动完成 Start Progress / Done 状态流转；仍保留子任务行手动记工时入口
  * ========================== */
  
 (() => {
@@ -3108,12 +3109,46 @@
     !!document.getElementById(IDS.btnDashboard);
   const countIssueActionBtns = () =>
     countActionBtns() + !!document.getElementById(IDS.btnCreateSubtask);
-  const getOpsBar = () =>
-    qs(SEL.opsBar) ||
-    (qs(SEL.splitPaneRight) && qs(SEL.opsBar, qs(SEL.splitPaneRight)));
+  const countVisibleActionBtns = () =>
+    [IDS.btnToolbar, IDS.btnDashboard].filter((id) =>
+      closestVisibleToolbar(document.getElementById(id))
+    ).length;
+  const countVisibleIssueActionBtns = () =>
+    countVisibleActionBtns() +
+    (closestVisibleToolbar(document.getElementById(IDS.btnCreateSubtask)) ? 1 : 0);
+  const isVisibleNode = (el) => {
+    if (!el || !document.documentElement.contains(el)) return false;
+    const rect = el.getBoundingClientRect?.();
+    const st = getComputedStyle(el);
+    return !!rect && rect.width > 0 && rect.height > 0 &&
+      st.display !== "none" && st.visibility !== "hidden";
+  };
+  const getOpsCandidates = () => {
+    const root = qs(SEL.splitPaneRight) || document;
+    const arr = [
+      ...qsa(SEL.opsBar, root),
+      ...(root === document ? [] : qsa(SEL.opsBar, document)),
+    ];
+    const seen = new Set();
+    return arr.filter((el) => {
+      if (!el || seen.has(el)) return false;
+      seen.add(el);
+      return true;
+    });
+  };
+  const getOpsBar = () => {
+    const candidates = getOpsCandidates();
+    return candidates.find(isVisibleNode) || candidates[0] || null;
+  };
+  const closestVisibleToolbar = (el) => {
+    const wrap = el?.closest?.(`#${IDS.toolbarWrap}`);
+    const bar = wrap?.closest?.(".command-bar, .aui-toolbar2, [data-test-id='issue.opsbar']");
+    return isVisibleNode(bar) ? bar : null;
+  };
   const ensureToolbarWrap = (ops) => {
     if (!ops) return null;
     let wrap = document.getElementById(IDS.toolbarWrap);
+    const target = ops.matches?.("a, button") ? ops.parentElement : ops;
     if (!wrap) {
       wrap = document.createElement("span");
       wrap.id = IDS.toolbarWrap;
@@ -3121,13 +3156,15 @@
         marginLeft: "8px", display: "inline-flex",
         gap: "8px", alignItems: "center",
       });
-      const target = ops.matches?.("a, button") ? ops.parentElement : ops;
       (target || ops).appendChild(wrap);
     } else {
-      const target = ops.matches?.("a, button") ? ops.parentElement : ops;
       if (wrap.parentNode !== target) (target || ops).appendChild(wrap);
     }
     return wrap;
+  };
+  const hasVisibleIssueToolbarButton = () => {
+    const ids = [IDS.btnCreateSubtask, IDS.btnToolbar, IDS.btnDashboard, IDS.btnSettings];
+    return ids.some((id) => closestVisibleToolbar(document.getElementById(id)));
   };
 
   const ensureToolbarButton = () => {
@@ -3233,9 +3270,9 @@
   const MAX_QUICK = 10, HB_MS = 1000, HB_BURST = 40;
   let quickSpin = 0, hbTimer = null, hbLeft = 0;
   const needButtons = () => {
-    if (isTestExecutionPage() && countActionBtns() < 2) return true;
+    if (isTestExecutionPage() && countVisibleActionBtns() < 2) return true;
     if (isJiraIssuePage()) {
-      if (!document.getElementById(IDS.btnCreateSubtask)) return true;
+      if (!closestVisibleToolbar(document.getElementById(IDS.btnCreateSubtask))) return true;
       const rows = getSubtaskRows();
       if (rows.length && rows.some((tr) => !tr.querySelector(`.${WORKLOG_BTN}`))) return true;
     }
@@ -3256,7 +3293,7 @@
     }
     if (isJiraIssuePage()) changed = ensureSubtaskWorklogButtons() || changed;
     if (isXrayReportListPage()) changed = ensureReportListButtons() || changed;
-    if (countIssueActionBtns() >= 2) {
+    if (countVisibleIssueActionBtns() >= 2) {
       const fb = document.getElementById(IDS.btnFloat);
       if (fb) fb.style.display = "none";
     }
@@ -3278,6 +3315,14 @@
     }
     if (needButtons()) extendHeartbeat();
   }, 60);
+  const scheduleStartupRearms = () => {
+    [0, 120, 350, 800, 1500, 3000, 5000].forEach((ms) => {
+      setTimeout(() => {
+        quickSpin = 0;
+        rearm();
+      }, ms);
+    });
+  };
  
   /* ========== Triggers ========== */
   new MutationObserver(() => rearm()).observe(
@@ -3372,7 +3417,7 @@
     Settings.load();
     loadExecMetric();
     quickSpin = 0;
-    rearm();
+    scheduleStartupRearms();
     extendHeartbeat();
     autoGenerateIfFlagged();
     if (isXrayReportListPage()) {

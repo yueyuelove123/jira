@@ -3077,12 +3077,46 @@
     !!document.getElementById(IDS.btnDashboard);
   const countIssueActionBtns = () =>
     countActionBtns() + !!document.getElementById(IDS.btnCreateSubtask);
-  const getOpsBar = () =>
-    qs(SEL.opsBar) ||
-    (qs(SEL.splitPaneRight) && qs(SEL.opsBar, qs(SEL.splitPaneRight)));
+  const countVisibleActionBtns = () =>
+    [IDS.btnToolbar, IDS.btnDashboard].filter((id) =>
+      closestVisibleToolbar(document.getElementById(id))
+    ).length;
+  const countVisibleIssueActionBtns = () =>
+    countVisibleActionBtns() +
+    (closestVisibleToolbar(document.getElementById(IDS.btnCreateSubtask)) ? 1 : 0);
+  const isVisibleNode = (el) => {
+    if (!el || !document.documentElement.contains(el)) return false;
+    const rect = el.getBoundingClientRect?.();
+    const st = getComputedStyle(el);
+    return !!rect && rect.width > 0 && rect.height > 0 &&
+      st.display !== "none" && st.visibility !== "hidden";
+  };
+  const getOpsCandidates = () => {
+    const root = qs(SEL.splitPaneRight) || document;
+    const arr = [
+      ...qsa(SEL.opsBar, root),
+      ...(root === document ? [] : qsa(SEL.opsBar, document)),
+    ];
+    const seen = new Set();
+    return arr.filter((el) => {
+      if (!el || seen.has(el)) return false;
+      seen.add(el);
+      return true;
+    });
+  };
+  const getOpsBar = () => {
+    const candidates = getOpsCandidates();
+    return candidates.find(isVisibleNode) || candidates[0] || null;
+  };
+  const closestVisibleToolbar = (el) => {
+    const wrap = el?.closest?.(`#${IDS.toolbarWrap}`);
+    const bar = wrap?.closest?.(".command-bar, .aui-toolbar2, [data-test-id='issue.opsbar']");
+    return isVisibleNode(bar) ? bar : null;
+  };
   const ensureToolbarWrap = (ops) => {
     if (!ops) return null;
     let wrap = document.getElementById(IDS.toolbarWrap);
+    const target = ops.matches?.("a, button") ? ops.parentElement : ops;
     if (!wrap) {
       wrap = document.createElement("span");
       wrap.id = IDS.toolbarWrap;
@@ -3090,13 +3124,15 @@
         marginLeft: "8px", display: "inline-flex",
         gap: "8px", alignItems: "center",
       });
-      const target = ops.matches?.("a, button") ? ops.parentElement : ops;
       (target || ops).appendChild(wrap);
     } else {
-      const target = ops.matches?.("a, button") ? ops.parentElement : ops;
       if (wrap.parentNode !== target) (target || ops).appendChild(wrap);
     }
     return wrap;
+  };
+  const hasVisibleIssueToolbarButton = () => {
+    const ids = [IDS.btnCreateSubtask, IDS.btnToolbar, IDS.btnDashboard, IDS.btnSettings];
+    return ids.some((id) => closestVisibleToolbar(document.getElementById(id)));
   };
 
   const ensureToolbarButton = () => {
@@ -3202,9 +3238,9 @@
   const MAX_QUICK = 10, HB_MS = 1000, HB_BURST = 40;
   let quickSpin = 0, hbTimer = null, hbLeft = 0;
   const needButtons = () => {
-    if (isTestExecutionPage() && countActionBtns() < 2) return true;
+    if (isTestExecutionPage() && countVisibleActionBtns() < 2) return true;
     if (isJiraIssuePage()) {
-      if (!document.getElementById(IDS.btnCreateSubtask)) return true;
+      if (!closestVisibleToolbar(document.getElementById(IDS.btnCreateSubtask))) return true;
       const rows = getSubtaskRows();
       if (rows.length && rows.some((tr) => !tr.querySelector(`.${WORKLOG_BTN}`))) return true;
     }
@@ -3225,7 +3261,7 @@
     }
     if (isJiraIssuePage()) changed = ensureSubtaskWorklogButtons() || changed;
     if (isXrayReportListPage()) changed = ensureReportListButtons() || changed;
-    if (countIssueActionBtns() >= 2) {
+    if (countVisibleIssueActionBtns() >= 2) {
       const fb = document.getElementById(IDS.btnFloat);
       if (fb) fb.style.display = "none";
     }
@@ -3247,6 +3283,14 @@
     }
     if (needButtons()) extendHeartbeat();
   }, 60);
+  const scheduleStartupRearms = () => {
+    [0, 120, 350, 800, 1500, 3000, 5000].forEach((ms) => {
+      setTimeout(() => {
+        quickSpin = 0;
+        rearm();
+      }, ms);
+    });
+  };
  
   /* ========== Triggers ========== */
   new MutationObserver(() => rearm()).observe(
@@ -3341,7 +3385,7 @@
     Settings.load();
     loadExecMetric();
     quickSpin = 0;
-    rearm();
+    scheduleStartupRearms();
     extendHeartbeat();
     autoGenerateIfFlagged();
     if (isXrayReportListPage()) {
