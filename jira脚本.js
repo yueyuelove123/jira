@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07.4
+// @version      2026-05-07.5
 // @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
@@ -16,6 +16,9 @@
 /* ==========================
  * 更新记录 / Changelog
  * ==========================
+ * 2026-05-07.5
+ *   - 测试小结按 Test Execution 工单缓存，用户清空输入时才删除缓存
+ * 
  * 2026-05-07.4
  *   - 创建测试子任务后自动按填写工时记录 Tempo 工时，并自动完成 Start Progress / Done 状态流转；仍保留子任务行手动记工时入口
  * 
@@ -362,6 +365,52 @@
       progress: c.total > 0 ? pct(executed / c.total) : 0,
       successRate: executed > 0 ? pct(c.pass / executed) : 0,
     };
+  };
+
+  /* ========== Test summary cache ========== */
+  const TEST_SUMMARY_CACHE_KEY = "tm_test_summary_cache_v1";
+  const TestSummaryCache = {
+    loadAll() {
+      try {
+        const data = JSON.parse(localStorage.getItem(TEST_SUMMARY_CACHE_KEY) || "{}");
+        return data && typeof data === "object" ? data : {};
+      } catch {
+        return {};
+      }
+    },
+    key(issueKey, title = "") {
+      const k = String(issueKey || "").trim();
+      if (k) return k;
+      const t = String(title || "").trim();
+      return t ? `title:${t}` : "";
+    },
+    get(issueKey, title = "") {
+      const k = this.key(issueKey, title);
+      if (!k) return "";
+      const data = this.loadAll();
+      return typeof data[k] === "string" ? data[k] : "";
+    },
+    set(issueKey, title, value) {
+      const k = this.key(issueKey, title);
+      if (!k) return;
+      const data = this.loadAll();
+      data[k] = String(value || "");
+      localStorage.setItem(TEST_SUMMARY_CACHE_KEY, JSON.stringify(data));
+    },
+    remove(issueKey, title = "") {
+      const k = this.key(issueKey, title);
+      if (!k) return;
+      const data = this.loadAll();
+      if (Object.prototype.hasOwnProperty.call(data, k)) {
+        delete data[k];
+        localStorage.setItem(TEST_SUMMARY_CACHE_KEY, JSON.stringify(data));
+      }
+    },
+    saveOrRemove(issueKey, title, value) {
+      const v = String(value || "").trim();
+      if (v) this.set(issueKey, title, v);
+      else this.remove(issueKey, title);
+    },
   };
  
   /* ========== Reporter helpers ========== */
@@ -2389,7 +2438,7 @@
     const roundInfo = extractRoundInfo(title);
     const currentKey = getCurrentIssueKey();
  
-    let testSummary = "";
+    let testSummary = TestSummaryCache.get(currentKey, title);
     const ctx = new ReportContext({
       counts, title, fixVersion, reporter, roundInfo,
       issueKey: currentKey, testSummary,
@@ -2733,6 +2782,7 @@
         });
         si.addEventListener("input", debounce(() => {
           testSummary = (si.value || "").trim();
+          TestSummaryCache.saveOrRemove(currentKey, title, testSummary);
           ctx.testSummary = testSummary;
           void recomputeAll({ rebuildContexts: false });
         }, 200));

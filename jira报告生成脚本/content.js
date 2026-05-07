@@ -305,6 +305,52 @@
       successRate: executed > 0 ? pct(c.pass / executed) : 0,
     };
   };
+
+  /* ========== Test summary cache ========== */
+  const TEST_SUMMARY_CACHE_KEY = "tm_test_summary_cache_v1";
+  const TestSummaryCache = {
+    loadAll() {
+      try {
+        const data = JSON.parse(localStorage.getItem(TEST_SUMMARY_CACHE_KEY) || "{}");
+        return data && typeof data === "object" ? data : {};
+      } catch {
+        return {};
+      }
+    },
+    key(issueKey, title = "") {
+      const k = String(issueKey || "").trim();
+      if (k) return k;
+      const t = String(title || "").trim();
+      return t ? `title:${t}` : "";
+    },
+    get(issueKey, title = "") {
+      const k = this.key(issueKey, title);
+      if (!k) return "";
+      const data = this.loadAll();
+      return typeof data[k] === "string" ? data[k] : "";
+    },
+    set(issueKey, title, value) {
+      const k = this.key(issueKey, title);
+      if (!k) return;
+      const data = this.loadAll();
+      data[k] = String(value || "");
+      localStorage.setItem(TEST_SUMMARY_CACHE_KEY, JSON.stringify(data));
+    },
+    remove(issueKey, title = "") {
+      const k = this.key(issueKey, title);
+      if (!k) return;
+      const data = this.loadAll();
+      if (Object.prototype.hasOwnProperty.call(data, k)) {
+        delete data[k];
+        localStorage.setItem(TEST_SUMMARY_CACHE_KEY, JSON.stringify(data));
+      }
+    },
+    saveOrRemove(issueKey, title, value) {
+      const v = String(value || "").trim();
+      if (v) this.set(issueKey, title, v);
+      else this.remove(issueKey, title);
+    },
+  };
  
   /* ========== Reporter helpers ========== */
   const DEFAULT_REPORTER_CANDIDATES = ["海绵","泡泡","生姜","双辞","秀妍","甜粥","子恒"];
@@ -2331,7 +2377,7 @@
     const roundInfo = extractRoundInfo(title);
     const currentKey = getCurrentIssueKey();
  
-    let testSummary = "";
+    let testSummary = TestSummaryCache.get(currentKey, title);
     const ctx = new ReportContext({
       counts, title, fixVersion, reporter, roundInfo,
       issueKey: currentKey, testSummary,
@@ -2675,6 +2721,7 @@
         });
         si.addEventListener("input", debounce(() => {
           testSummary = (si.value || "").trim();
+          TestSummaryCache.saveOrRemove(currentKey, title, testSummary);
           ctx.testSummary = testSummary;
           void recomputeAll({ rebuildContexts: false });
         }, 200));
