@@ -2742,7 +2742,9 @@
             : "复测bug率：—"
         );
       }
-      if (this.testSummary) lines.push(`测试小结：${this.testSummary}`);
+      if (this.testSummary) {
+        lines.push("测试小结：", this.testSummary);
+      }
       lines.push(
         `bug地址：${bugUrl(this.fixVersion, this.roundInfo, this.currentReporterList, this.title)}`
       );
