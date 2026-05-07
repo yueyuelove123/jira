@@ -66,7 +66,7 @@
     issueSummary:
       '#summary-val, h1#summary-val, h1[data-test-id="issue.views.issue-base.foundation.summary.heading"]',
     opsBar:
-      '.command-bar, #opsbar-operations, #opsbar-operations_more, [data-test-id="issue.issue-view.views.issue-base.foundation.quick-add.quick-add"], [data-test-id="issue.opsbar"]',
+      '.command-bar .aui-toolbar2-primary, .command-bar .ops-menus, .command-bar, #opsbar-operations, #opsbar-operations_more, #opsbar-opsbar-operations, #opsbar-opsbar-transitions, .aui-page-header-actions, [data-test-id="issue.issue-view.views.issue-base.foundation.quick-add.quick-add"], [data-test-id="issue.opsbar"]',
     typeVal: "#type-val",
     progressBar: "#exec-tests-progressbar",
     fixVer: "#fixVersions-field a",
@@ -78,7 +78,6 @@
     modal: "tm-test-report-modal",
     btnToolbar: "tm-btn-toolbar",
     btnDashboard: "tm-btn-dashboard",
-    btnTitle: "tm-btn-title",
     toolbarWrap: "tm-toolbar-wrap",
     btnFloat: "tm-btn-float",
     btnSettings: "tm-btn-settings",
@@ -3059,8 +3058,7 @@
   /* ========== Buttons injection ========== */
   const countActionBtns = () =>
     !!document.getElementById(IDS.btnToolbar) +
-    !!document.getElementById(IDS.btnDashboard) +
-    !!document.getElementById(IDS.btnTitle);
+    !!document.getElementById(IDS.btnDashboard);
   const countIssueActionBtns = () =>
     countActionBtns() + !!document.getElementById(IDS.btnCreateSubtask);
   const getOpsBar = () =>
@@ -3076,8 +3074,12 @@
         marginLeft: "8px", display: "inline-flex",
         gap: "8px", alignItems: "center",
       });
-      ops.appendChild(wrap);
-    } else if (wrap.parentNode !== ops) ops.appendChild(wrap);
+      const target = ops.matches?.("a, button") ? ops.parentElement : ops;
+      (target || ops).appendChild(wrap);
+    } else {
+      const target = ops.matches?.("a, button") ? ops.parentElement : ops;
+      if (wrap.parentNode !== target) (target || ops).appendChild(wrap);
+    }
     return wrap;
   };
 
@@ -3137,16 +3139,6 @@
       changed = true;
     });
     return changed;
-  };
-  const ensureTitleButton = () => {
-    if (document.getElementById(IDS.btnTitle) || !isTestExecutionPage()) return false;
-    const titleEl = scoped(SEL.issueSummary);
-    if (!titleEl) return false;
-    const btn = mkBtn("生成报告", { variant: "ghost", size: "sm", id: IDS.btnTitle });
-    btn.onclick = generateReport;
-    const parent = titleEl.parentElement || qs(SEL.splitPaneRight) || document.body;
-    insertAfter(btn, titleEl) || parent.appendChild(btn);
-    return true;
   };
   const ensureFloatButton = () => {
     const fb = document.getElementById(IDS.btnFloat);
@@ -3213,7 +3205,6 @@
       changed = ensureToolbarButton() || changed;
     }
     if (isTestExecutionPage()) {
-      changed = ensureTitleButton() || changed;
       ensureFloatButton();
     }
     if (isJiraIssuePage()) changed = ensureSubtaskWorklogButtons() || changed;
@@ -3335,6 +3326,7 @@
     loadExecMetric();
     quickSpin = 0;
     rearm();
+    extendHeartbeat();
     autoGenerateIfFlagged();
     if (isXrayReportListPage()) {
       hbLeft = Math.max(hbLeft, HB_BURST);

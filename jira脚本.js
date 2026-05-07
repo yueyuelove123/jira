@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07.6
+// @version      2026-05-07.7
 // @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
@@ -16,6 +16,9 @@
 /* ==========================
  * 更新记录 / Changelog
  * ==========================
+ * 2026-05-07.7
+ *   - 移除标题旁“生成报告”按钮，增强首次进入 Jira 问题页时工具栏按钮挂载稳定性
+ * 
  * 2026-05-07.6
  *   - 修复测试小结输入后立刻关闭弹窗时未落缓存的问题：输入即时保存，关闭弹窗兜底保存
  * 
@@ -27,9 +30,6 @@
  * 
  * 2026-05-07.3
  *   - 新增 Jira 问题页一键创建测试子任务：标题和工时手动填写，修复版本取当前任务，经办人取当前登录用户
- * 
- * 2026-05-07.2
- *   - 子任务行记录工时前自动 Start Progress，工时记录成功后自动 Done
  * ========================== */
  
 (() => {
@@ -97,7 +97,7 @@
     issueSummary:
       '#summary-val, h1#summary-val, h1[data-test-id="issue.views.issue-base.foundation.summary.heading"]',
     opsBar:
-      '.command-bar, #opsbar-operations, #opsbar-operations_more, [data-test-id="issue.issue-view.views.issue-base.foundation.quick-add.quick-add"], [data-test-id="issue.opsbar"]',
+      '.command-bar .aui-toolbar2-primary, .command-bar .ops-menus, .command-bar, #opsbar-operations, #opsbar-operations_more, #opsbar-opsbar-operations, #opsbar-opsbar-transitions, .aui-page-header-actions, [data-test-id="issue.issue-view.views.issue-base.foundation.quick-add.quick-add"], [data-test-id="issue.opsbar"]',
     typeVal: "#type-val",
     progressBar: "#exec-tests-progressbar",
     fixVer: "#fixVersions-field a",
@@ -109,7 +109,6 @@
     modal: "tm-test-report-modal",
     btnToolbar: "tm-btn-toolbar",
     btnDashboard: "tm-btn-dashboard",
-    btnTitle: "tm-btn-title",
     toolbarWrap: "tm-toolbar-wrap",
     btnFloat: "tm-btn-float",
     btnSettings: "tm-btn-settings",
@@ -3090,8 +3089,7 @@
   /* ========== Buttons injection ========== */
   const countActionBtns = () =>
     !!document.getElementById(IDS.btnToolbar) +
-    !!document.getElementById(IDS.btnDashboard) +
-    !!document.getElementById(IDS.btnTitle);
+    !!document.getElementById(IDS.btnDashboard);
   const countIssueActionBtns = () =>
     countActionBtns() + !!document.getElementById(IDS.btnCreateSubtask);
   const getOpsBar = () =>
@@ -3107,8 +3105,12 @@
         marginLeft: "8px", display: "inline-flex",
         gap: "8px", alignItems: "center",
       });
-      ops.appendChild(wrap);
-    } else if (wrap.parentNode !== ops) ops.appendChild(wrap);
+      const target = ops.matches?.("a, button") ? ops.parentElement : ops;
+      (target || ops).appendChild(wrap);
+    } else {
+      const target = ops.matches?.("a, button") ? ops.parentElement : ops;
+      if (wrap.parentNode !== target) (target || ops).appendChild(wrap);
+    }
     return wrap;
   };
 
@@ -3168,16 +3170,6 @@
       changed = true;
     });
     return changed;
-  };
-  const ensureTitleButton = () => {
-    if (document.getElementById(IDS.btnTitle) || !isTestExecutionPage()) return false;
-    const titleEl = scoped(SEL.issueSummary);
-    if (!titleEl) return false;
-    const btn = mkBtn("生成报告", { variant: "ghost", size: "sm", id: IDS.btnTitle });
-    btn.onclick = generateReport;
-    const parent = titleEl.parentElement || qs(SEL.splitPaneRight) || document.body;
-    insertAfter(btn, titleEl) || parent.appendChild(btn);
-    return true;
   };
   const ensureFloatButton = () => {
     const fb = document.getElementById(IDS.btnFloat);
@@ -3244,7 +3236,6 @@
       changed = ensureToolbarButton() || changed;
     }
     if (isTestExecutionPage()) {
-      changed = ensureTitleButton() || changed;
       ensureFloatButton();
     }
     if (isJiraIssuePage()) changed = ensureSubtaskWorklogButtons() || changed;
@@ -3366,6 +3357,7 @@
     loadExecMetric();
     quickSpin = 0;
     rearm();
+    extendHeartbeat();
     autoGenerateIfFlagged();
     if (isXrayReportListPage()) {
       hbLeft = Math.max(hbLeft, HB_BURST);
