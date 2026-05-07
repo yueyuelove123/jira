@@ -1397,6 +1397,22 @@
           if (type === "date") expandDatePickerHotzone(el);
           return el;
         };
+        const hourOptionsId = `tm-hour-options-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const hourOptions = document.createElement("datalist");
+        hourOptions.id = hourOptionsId;
+        ["2", "4", "8", "2.5"].forEach((value) => {
+          const option = document.createElement("option");
+          option.value = value;
+          hourOptions.appendChild(option);
+        });
+        content.appendChild(hourOptions);
+        const makeHoursInput = (value = "2") => {
+          const el = makeInput("text", value);
+          el.setAttribute("list", hourOptionsId);
+          el.inputMode = "decimal";
+          el.placeholder = "2";
+          return el;
+        };
         const makeField = (label, input, hint) => {
           const wrap = document.createElement("label");
           Object.assign(wrap.style, { display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px", color: "#64748b" });
@@ -1428,22 +1444,22 @@
             syncWorklogRows(subtask);
           });
         };
-        const addWorklogRow = (subtask, { started = formatDateYmd(), hours = "0.5h" } = {}) => {
+        const addWorklogRow = (subtask, { started = formatDateYmd(), hours = "2" } = {}) => {
           const rowEl = document.createElement("div");
           Object.assign(rowEl.style, {
             display: "grid",
             gridTemplateColumns: "minmax(120px, 1fr) minmax(90px, .8fr) auto",
             gap: "8px",
-            alignItems: "end",
+            alignItems: "start",
           });
           const startedInput = makeInput("date", started);
-          const hoursInput = makeInput("text", hours);
-          hoursInput.placeholder = "0.5h";
+          const hoursInput = makeHoursInput(hours);
           const removeBtn = mkBtn("删除", { variant: "ghost", size: "sm" });
           Object.assign(removeBtn.style, {
             height: TM_INPUT_HEIGHT,
             padding: "0 8px",
-            alignSelf: "end",
+            alignSelf: "start",
+            marginTop: "20px",
           });
           const row = { rowEl, startedInput, hoursInput, removeBtn };
           removeBtn.onclick = () => {
@@ -1453,7 +1469,7 @@
             syncWorklogRows(subtask);
           };
           rowEl.appendChild(makeField("记录日期", startedInput));
-          rowEl.appendChild(makeField("工时", hoursInput, "支持 0.5h、0.5、4h、30m 写法"));
+          rowEl.appendChild(makeField("工时", hoursInput, "可选 2、4、8、2.5，也可手动填写"));
           rowEl.appendChild(removeBtn);
           subtask.worklogRows.push(row);
           subtask.worklogList.appendChild(rowEl);
@@ -1566,7 +1582,7 @@
                   throw new Error(`子任务 ${i + 1} 第 ${j + 1} 条记录日期格式不正确`);
                 }
                 if (seconds <= 0) {
-                  throw new Error(`子任务 ${i + 1} 第 ${j + 1} 条工时格式不正确，请填写 0.5h、0.5、4h 或 30m`);
+                  throw new Error(`子任务 ${i + 1} 第 ${j + 1} 条工时格式不正确，请选择 2、4、8、2.5 或手动填写`);
                 }
               }
               return requireWorklogs ? { started, seconds } : { seconds };
@@ -1574,7 +1590,7 @@
             const totalSeconds = worklogs.reduce((sum, row) => sum + row.seconds, 0);
             return {
               summary,
-              estimate: totalSeconds > 0 ? formatSeconds(totalSeconds) : "0.5h",
+              estimate: totalSeconds > 0 ? formatSeconds(totalSeconds) : "2h",
               totalSeconds,
               worklogs,
             };
