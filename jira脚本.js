@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07.3
+// @version      2026-05-07.4
 // @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
@@ -16,6 +16,9 @@
 /* ==========================
  * 更新记录 / Changelog
  * ==========================
+ * 2026-05-07.4
+ *   - 创建测试子任务后自动按填写工时记录 Tempo 工时，并自动完成 Start Progress / Done 状态流转；仍保留子任务行手动记工时入口
+ * 
  * 2026-05-07.3
  *   - 新增 Jira 问题页一键创建测试子任务：标题和工时手动填写，修复版本取当前任务，经办人取当前登录用户
  * 
@@ -1103,6 +1106,32 @@
     runIssueTransition(issue, ["Start Progress", "开始处理", "处理中"]);
   const doneIssue = (issue) =>
     runIssueTransition(issue, ["Done", "完成", "已完成"]);
+  const recordIssueWorklogAndDone = async ({ issue, worker, started, seconds, comment, setStatus }) => {
+    if (!issue?.key || !issue?.id) throw new Error("缺少子任务信息，无法记录工时");
+    if (!worker) throw new Error("缺少当前用户，无法记录工时");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(started || ""))) {
+      throw new Error("记录日期格式不正确");
+    }
+    if (!(Number(seconds) > 0)) throw new Error("记录工时必须大于 0");
+    setStatus?.(`正在将 ${issue.key} 置为处理中...`);
+    const startedProgress = await startProgressIssue(issue);
+    if (!startedProgress) log(`${issue.key} 未找到 Start Progress 动作，继续记录工时`);
+    await sleep(350);
+    setStatus?.(`正在记录 ${issue.key}：${formatSeconds(seconds)}...`);
+    await postTempoWorklog({
+      issue,
+      worker,
+      started,
+      seconds,
+      remainingEstimate: 0,
+      comment: (comment || "").trim(),
+    });
+    await sleep(350);
+    setStatus?.(`正在将 ${issue.key} 置为完成...`);
+    const done = await doneIssue(issue);
+    if (!done) log(`${issue.key} 未找到 Done 动作`);
+    return true;
+  };
 
   /* ========== Subtask create ========== */
   const CREATE_SUBTASK_SETTINGS_KEY = "tm_create_subtask_settings_v1";
@@ -1256,8 +1285,43 @@
       data?.issueKey ||
       data?.createdIssueDetails?.issueKey ||
       data?.createdIssueDetails?.key ||
+      data?.createdIssueDetails?.issue?.key ||
+      data?.createdIssueDetails?.issue?.issueKey ||
+      data?.createdIssueDetails?.id ||
+      data?.createdIssueDetails?.key ||
       "";
     return { key: createdKey, raw: data };
+  };
+  const issueFromCreatedIssueDetails = (created) => {
+    const d = created?.raw?.createdIssueDetails || {};
+    if (!d?.key || !d?.id) return null;
+    const f = d.fields || {};
+    const remaining = Number(f.timeestimate ?? f.timetracking?.remainingEstimateSeconds ?? 0) || 0;
+    const original = Number(f.timeoriginalestimate ?? f.timetracking?.originalEstimateSeconds ?? 0) || 0;
+    const spent = Number(f.timespent ?? f.timetracking?.timeSpentSeconds ?? 0) || 0;
+    return {
+      id: String(d.id),
+      key: d.key,
+      summary: f.summary || "",
+      issueType: f.issuetype?.name || "",
+      issueTypeSubtask: !!f.issuetype?.subtask,
+      status: f.status?.name || "",
+      assignee: f.assignee?.displayName || f.assignee?.name || "",
+      remainingSeconds: remaining,
+      originalSeconds: original,
+      spentSeconds: spent,
+      checked: true,
+    };
+  };
+  const fetchCreatedSubtaskIssue = async (created) => {
+    const fromPayload = issueFromCreatedIssueDetails(created);
+    if (fromPayload) return fromPayload;
+    const key = created?.key;
+    if (!key) throw new Error("子任务已创建，但未获取到新子任务 Key，无法自动记录工时");
+    const list = await fetchSubtaskDetails([key]);
+    const issue = list[0] || null;
+    if (!issue) throw new Error(`未能获取新子任务 ${key} 详情，无法自动记录工时`);
+    return issue;
   };
   const openCreateSubtaskPanel = () => {
     if (document.getElementById(IDS.modal)) return;
@@ -1291,7 +1355,7 @@
       putInfo("经办人", worker?.displayName || "正在加载...");
     };
     const modal = new ReportModal("", {
-      title: "创建测试子任务",
+      title: "创建并完成测试子任务",
       bodyBuilder(content, m) {
         content.style.overflow = "auto";
         content.style.gap = "12px";
@@ -1355,7 +1419,7 @@
               setStatus("当前任务没有修复版本，无法创建子任务", true);
               return;
             }
-            setStatus(`将创建测试子任务，修复版本使用“${context.fixVersionName}”，经办人使用“${u.displayName}”。`);
+            setStatus(`将创建测试子任务，修复版本使用“${context.fixVersionName}”，经办人使用“${u.displayName}”，创建后自动记录工时并完成状态。`);
             if (submitBtn) submitBtn.disabled = false;
           })
           .catch((e) => {
@@ -1368,19 +1432,24 @@
       footerBuilder(footer, m) {
         cancelBtn = mkBtn("取消", { variant: "ghost", size: "md" });
         cancelBtn.onclick = () => m.close();
-        submitBtn = mkBtn("创建子任务", { variant: "primary", size: "md" });
+        submitBtn = mkBtn("创建并记工时", { variant: "primary", size: "md" });
         submitBtn.disabled = true;
         submitBtn.onclick = async () => {
           const f = m.__createSubtaskForm;
           if (!f || !context || !worker) return;
           const summary = (f.summaryInput.value || "").trim();
           const estimate = normalizeWorkEstimate(f.hoursInput.value);
+          const seconds = parseWorkSeconds(f.hoursInput.value);
           if (!summary) {
             setStatus("标题不能为空", true);
             return;
           }
           if (!estimate) {
             setStatus("工时格式不正确，请填写 0.5h、0.5、4h 或 30m", true);
+            return;
+          }
+          if (seconds <= 0) {
+            setStatus("记录工时必须大于 0", true);
             return;
           }
           CreateSubtaskSettings.save({
@@ -1392,12 +1461,22 @@
           try {
             const created = await postCreateSubtask({ context, worker, summary, estimate });
             const keyText = created.key ? ` ${created.key}` : "";
-            setStatus(`已创建子任务${keyText}，正在刷新页面...`);
-            toast(`已创建子任务${keyText}`);
-            setTimeout(() => location.reload(), 800);
+            setStatus(`已创建子任务${keyText}，正在准备记录工时...`);
+            const createdIssue = await fetchCreatedSubtaskIssue(created);
+            await recordIssueWorklogAndDone({
+              issue: createdIssue,
+              worker: worker.key,
+              started: formatDateYmd(),
+              seconds,
+              comment: "",
+              setStatus,
+            });
+            setStatus(`已创建并完成 ${createdIssue.key}：${formatSeconds(seconds)}，正在刷新页面...`);
+            toast(`已创建并记录 ${createdIssue.key} 工时`);
+            setTimeout(() => location.reload(), 900);
           } catch (e) {
-            log("创建子任务失败", e);
-            setStatus(e.message || "创建失败", true);
+            log("创建并记录子任务工时失败", e);
+            setStatus(e.message || "创建或记录失败", true);
             submitBtn.disabled = false;
             cancelBtn.disabled = false;
           }
@@ -1578,24 +1657,15 @@
           });
           submitBtn.disabled = true;
           cancelBtn.disabled = true;
-          setStatus(`正在将 ${issue.key} 置为处理中...`);
           try {
-            const startedProgress = await startProgressIssue(issue);
-            if (!startedProgress) log(`${issue.key} 未找到 Start Progress 动作，继续记录工时`);
-            await sleep(350);
-            setStatus(`正在记录 ${issue.key}：${formatSeconds(seconds)}...`);
-            await postTempoWorklog({
+            await recordIssueWorklogAndDone({
               issue,
               worker: worker.key,
               started,
               seconds,
-              remainingEstimate: 0,
               comment: (f.commentInput.value || "").trim(),
+              setStatus,
             });
-            await sleep(350);
-            setStatus(`正在将 ${issue.key} 置为完成...`);
-            const done = await doneIssue(issue);
-            if (!done) log(`${issue.key} 未找到 Done 动作`);
             setStatus(`已记录 ${issue.key}：${formatSeconds(seconds)}，状态已处理`);
             toast(`已记录 ${issue.key} 工时并处理状态`);
             setTimeout(() => m.close(), 700);
