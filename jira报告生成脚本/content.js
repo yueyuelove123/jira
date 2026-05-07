@@ -1379,6 +1379,7 @@
             subtask.worklogRows.forEach((row) => {
               row.startedInput.disabled = disabled;
               row.hoursInput.disabled = disabled;
+              row.hoursToggle.disabled = disabled;
               row.removeBtn.disabled = disabled || subtask.worklogRows.length <= 1;
             });
           });
@@ -1397,21 +1398,107 @@
           if (type === "date") expandDatePickerHotzone(el);
           return el;
         };
-        const hourOptionsId = `tm-hour-options-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const hourOptions = document.createElement("datalist");
-        hourOptions.id = hourOptionsId;
-        ["2", "4", "8", "2.5"].forEach((value) => {
-          const option = document.createElement("option");
-          option.value = value;
-          hourOptions.appendChild(option);
-        });
-        content.appendChild(hourOptions);
+        const hourOptions = ["2", "4", "8", "2.5"];
         const makeHoursInput = (value = "2") => {
+          const wrap = document.createElement("div");
+          Object.assign(wrap.style, {
+            position: "relative",
+            display: "flex",
+            width: "100%",
+          });
           const el = makeInput("text", value);
-          el.setAttribute("list", hourOptionsId);
           el.inputMode = "decimal";
           el.placeholder = "2";
-          return el;
+          el.style.paddingRight = "34px";
+          const toggleBtn = document.createElement("button");
+          toggleBtn.type = "button";
+          toggleBtn.textContent = "▾";
+          Object.assign(toggleBtn.style, {
+            position: "absolute",
+            right: "1px",
+            top: "1px",
+            width: "32px",
+            height: "30px",
+            border: "0",
+            borderLeft: "1px solid var(--tm-border)",
+            borderRadius: "0 7px 7px 0",
+            background: "transparent",
+            color: "#64748b",
+            cursor: "pointer",
+            fontSize: "12px",
+            lineHeight: "30px",
+            padding: "0",
+          });
+          const menu = document.createElement("div");
+          Object.assign(menu.style, {
+            position: "absolute",
+            right: "0",
+            top: "calc(100% + 4px)",
+            minWidth: "120px",
+            background: "#fff",
+            color: "#1f2328",
+            border: "1px solid rgba(148,163,184,0.45)",
+            borderRadius: "8px",
+            boxShadow: "0 10px 24px rgba(15,23,42,0.16)",
+            padding: "4px",
+            zIndex: "10002",
+            display: "none",
+          });
+          if (matchMedia?.("(prefers-color-scheme: dark)").matches) {
+            menu.style.background = "#0f172a";
+            menu.style.color = "#e2e8f0";
+          }
+          hourOptions.forEach((optionValue) => {
+            const item = document.createElement("button");
+            item.type = "button";
+            item.textContent = optionValue;
+            Object.assign(item.style, {
+              display: "block",
+              width: "100%",
+              height: "30px",
+              padding: "0 10px",
+              border: "0",
+              borderRadius: "6px",
+              background: "transparent",
+              color: "inherit",
+              textAlign: "left",
+              cursor: "pointer",
+              fontSize: "12px",
+            });
+            item.onmouseenter = () => { item.style.background = "rgba(37,99,235,0.10)"; };
+            item.onmouseleave = () => { item.style.background = "transparent"; };
+            item.onclick = () => {
+              el.value = optionValue;
+              menu.style.display = "none";
+              el.focus();
+            };
+            menu.appendChild(item);
+          });
+          const closeMenu = (e) => {
+            if (wrap.contains(e.target)) return;
+            menu.style.display = "none";
+            document.removeEventListener("mousedown", closeMenu, true);
+          };
+          toggleBtn.onclick = () => {
+            const opening = menu.style.display === "none";
+            menu.style.display = opening ? "block" : "none";
+            if (opening) setTimeout(() => document.addEventListener("mousedown", closeMenu, true), 0);
+          };
+          el.addEventListener("keydown", (e) => {
+            if (e.key === "ArrowDown" && e.altKey) {
+              e.preventDefault();
+              menu.style.display = "block";
+              setTimeout(() => document.addEventListener("mousedown", closeMenu, true), 0);
+            } else if (e.key === "Escape") {
+              menu.style.display = "none";
+            }
+          });
+          wrap.appendChild(el);
+          wrap.appendChild(toggleBtn);
+          wrap.appendChild(menu);
+          wrap.inputEl = el;
+          wrap.toggleBtn = toggleBtn;
+          return wrap;
         };
         const makeField = (label, input, hint) => {
           const wrap = document.createElement("label");
@@ -1453,7 +1540,9 @@
             alignItems: "start",
           });
           const startedInput = makeInput("date", started);
-          const hoursInput = makeHoursInput(hours);
+          const hoursWrap = makeHoursInput(hours);
+          const hoursInput = hoursWrap.inputEl;
+          const hoursToggle = hoursWrap.toggleBtn;
           const removeBtn = mkBtn("删除", { variant: "ghost", size: "sm" });
           Object.assign(removeBtn.style, {
             height: TM_INPUT_HEIGHT,
@@ -1461,7 +1550,7 @@
             alignSelf: "start",
             marginTop: "20px",
           });
-          const row = { rowEl, startedInput, hoursInput, removeBtn };
+          const row = { rowEl, startedInput, hoursInput, hoursToggle, removeBtn };
           removeBtn.onclick = () => {
             if (subtask.worklogRows.length <= 1) return;
             subtask.worklogRows = subtask.worklogRows.filter((it) => it !== row);
@@ -1469,7 +1558,7 @@
             syncWorklogRows(subtask);
           };
           rowEl.appendChild(makeField("记录日期", startedInput));
-          rowEl.appendChild(makeField("工时", hoursInput, "可选 2、4、8、2.5，也可手动填写"));
+          rowEl.appendChild(makeField("工时", hoursWrap, "可选 2、4、8、2.5，也可手动填写"));
           rowEl.appendChild(removeBtn);
           subtask.worklogRows.push(row);
           subtask.worklogList.appendChild(rowEl);
