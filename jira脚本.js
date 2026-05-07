@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07.2
-// @description  Test Execution 一键报告 + 合并执行 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
+// @version      2026-05-07.3
+// @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
 // @match        https://jira.cjdropshipping.cn/secure/XrayReport*
@@ -16,6 +16,9 @@
 /* ==========================
  * 更新记录 / Changelog
  * ==========================
+ * 2026-05-07.3
+ *   - 新增 Jira 问题页一键创建测试子任务：标题和工时手动填写，修复版本取当前任务，经办人取当前登录用户
+ * 
  * 2026-05-07.2
  *   - 子任务行记录工时前自动 Start Progress，工时记录成功后自动 Done
  * 
@@ -134,6 +137,7 @@
     toolbarWrap: "tm-toolbar-wrap",
     btnFloat: "tm-btn-float",
     btnSettings: "tm-btn-settings",
+    btnCreateSubtask: "tm-btn-create-subtask",
   };
   const ROW_BTN = "tm-row-report-btn";
  
@@ -310,6 +314,17 @@
       else total += n * 3600;
     }
     return Math.round(total);
+  };
+  const normalizeWorkEstimate = (raw) => {
+    const s = String(raw || "").trim().toLowerCase();
+    if (!s) return "";
+    const plain = Number(s);
+    if (Number.isFinite(plain) && plain > 0) return `${plain}h`;
+    const seconds = parseWorkSeconds(s);
+    if (seconds <= 0) return "";
+    const hours = seconds / 3600;
+    if (Number.isInteger(hours)) return `${hours}h`;
+    return `${Math.round(hours * 100) / 100}h`;
   };
 
   /* ========== Exec metric config ========== */
@@ -1088,6 +1103,311 @@
     runIssueTransition(issue, ["Start Progress", "开始处理", "处理中"]);
   const doneIssue = (issue) =>
     runIssueTransition(issue, ["Done", "完成", "已完成"]);
+
+  /* ========== Subtask create ========== */
+  const CREATE_SUBTASK_SETTINGS_KEY = "tm_create_subtask_settings_v1";
+  const SUBTASK_ISSUE_TYPE_ID = "10104";
+  const CreateSubtaskSettings = {
+    load() {
+      let s = {};
+      try { s = JSON.parse(localStorage.getItem(CREATE_SUBTASK_SETTINGS_KEY) || "{}"); } catch {}
+      return { hours: "0.5h", ...s };
+    },
+    save(v) {
+      try { localStorage.setItem(CREATE_SUBTASK_SETTINGS_KEY, JSON.stringify(v || {})); } catch {}
+    },
+  };
+  const fetchCurrentIssueContextForSubtask = async () => {
+    const key = getCurrentIssueKey();
+    if (!key) throw new Error("缺少当前问题 Key，无法创建子任务");
+    const r = await fetch(`/rest/api/2/issue/${encodeURIComponent(key)}?fields=fixVersions,project,priority`, {
+      method: "GET", credentials: "include",
+      headers: {
+        Accept: "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+      },
+    });
+    if (!r.ok) throw new Error(`获取当前问题信息失败（${r.status}）`);
+    const data = await r.json();
+    const fix = data?.fields?.fixVersions?.[0] || null;
+    const project = data?.fields?.project || null;
+    const priority = data?.fields?.priority || null;
+    return {
+      id: String(data?.id || getCurrentIssueId() || ""),
+      key: data?.key || key,
+      fixVersionId: fix?.id ? String(fix.id) : "",
+      fixVersionName: fix?.name || extractFixVersion() || "",
+      projectId: project?.id ? String(project.id) : "10000",
+      priorityId: priority?.id ? String(priority.id) : "3",
+    };
+  };
+  const extractFormTokenFromQuickCreate = (data) => {
+    if (data?.formToken) return String(data.formToken);
+    const fields = Array.isArray(data?.fields) ? data.fields : [];
+    for (const f of fields) {
+      const html = String(f?.editHtml || "");
+      if (!html) continue;
+      const dom = new DOMParser().parseFromString(html, "text/html");
+      const input = dom.querySelector('input[name="formToken"]');
+      const v = input?.getAttribute("value");
+      if (v) return v;
+    }
+    const raw = JSON.stringify(data || {});
+    const m =
+      raw.match(/name=\\?"formToken\\?"[^]*?value=\\?"([^"\\]+)\\?"/i) ||
+      raw.match(/"formToken"\s*:\s*"([^"]+)"/i) ||
+      raw.match(/formToken[^a-z0-9]+([a-f0-9]{20,})/i);
+    return m ? m[1] : "";
+  };
+  const fetchQuickCreateFormToken = async (parentIssueId) => {
+    const token = getXsrfToken();
+    if (!token) throw new Error("缺少 XSRF Token，无法创建子任务，请刷新页面后重试");
+    const form = new URLSearchParams();
+    form.set("atl_token", token);
+    const r = await fetch(
+      `/secure/QuickCreateIssue!default.jspa?decorator=none&parentIssueId=${encodeURIComponent(parentIssueId)}`,
+      {
+        method: "POST", credentials: "include",
+        headers: {
+          Accept: "application/json, text/javascript, */*; q=0.01",
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: form.toString(),
+      }
+    );
+    if (!r.ok) throw new Error(`初始化创建子任务表单失败（${r.status}）`);
+    const data = await r.json();
+    const formToken = extractFormTokenFromQuickCreate(data);
+    if (!formToken) throw new Error("未获取到创建子任务 formToken，请刷新页面后重试");
+    return formToken;
+  };
+  const appendCreateFieldRetains = (form) => {
+    [
+      "project", "issuetype", "fixVersions", "customfield_10705",
+      "priority", "labels", "assignee", "customfield_10108",
+      "customfield_10101", "customfield_10102", "customfield_10507",
+      "issuelinks", "resolution",
+    ].forEach((v) => form.append("fieldsToRetain", v));
+  };
+  const parseQuickCreateError = (data, fallbackText = "") => {
+    const errors = data?.errors || {};
+    const messages = [];
+    if (Array.isArray(data?.errorMessages)) messages.push(...data.errorMessages);
+    if (errors && typeof errors === "object") {
+      Object.entries(errors).forEach(([k, v]) => {
+        if (Array.isArray(v)) v.forEach((x) => messages.push(`${k}：${x}`));
+        else if (v) messages.push(`${k}：${v}`);
+      });
+    }
+    if (messages.length) return messages.join("；");
+    if (fallbackText && /error|错误|required|必填|invalid/i.test(fallbackText)) {
+      return fallbackText.replace(/\s+/g, " ").slice(0, 180);
+    }
+    return "";
+  };
+  const postCreateSubtask = async ({ context, worker, summary, estimate }) => {
+    const xsrf = getXsrfToken();
+    if (!xsrf) throw new Error("缺少 XSRF Token，无法创建子任务，请刷新页面后重试");
+    if (!context?.id) throw new Error("缺少父任务 ID，无法创建子任务");
+    if (!context?.fixVersionId) throw new Error("当前任务没有可提交的修复版本 ID，无法创建子任务");
+    const formToken = await fetchQuickCreateFormToken(context.id);
+    const form = new URLSearchParams();
+    form.set("pid", context.projectId || "10000");
+    form.set("issuetype", SUBTASK_ISSUE_TYPE_ID);
+    form.set("parentIssueId", context.id);
+    form.set("atl_token", xsrf);
+    form.set("formToken", formToken);
+    form.set("summary", summary);
+    form.set("fixVersions", context.fixVersionId);
+    form.set("priority", context.priorityId || "3");
+    form.set("dnd-dropzone", "");
+    form.set("assignee", worker.displayName || worker.name || worker.key);
+    form.set("customfield_10101", "");
+    form.set("customfield_10102", "");
+    form.set("description", "");
+    form.set("timetracking_originalestimate", estimate);
+    form.set("timetracking_remainingestimate", "");
+    form.set("isCreateIssue", "true");
+    form.set("hasWorkStarted", "");
+    form.set("issuelinks", "issuelinks");
+    form.set("issuelinks-linktype", "blocks");
+    form.set("resolution", "10000");
+    appendCreateFieldRetains(form);
+    const r = await fetch("/secure/QuickCreateIssue.jspa?decorator=none", {
+      method: "POST", credentials: "include",
+      headers: {
+        Accept: "application/json, text/javascript, */*; q=0.01",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        "X-Atlassian-Token": "no-check",
+      },
+      body: form.toString(),
+    });
+    const text = await r.text().catch(() => "");
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!r.ok) {
+      throw new Error(`创建子任务失败（${r.status}）${text ? "：" + text.slice(0, 120) : ""}`);
+    }
+    const err = parseQuickCreateError(data, text);
+    if (err && !data?.issueKey && !data?.createdIssueDetails) throw new Error(`创建子任务失败：${err}`);
+    const createdKey =
+      data?.issueKey ||
+      data?.createdIssueDetails?.issueKey ||
+      data?.createdIssueDetails?.key ||
+      "";
+    return { key: createdKey, raw: data };
+  };
+  const openCreateSubtaskPanel = () => {
+    if (document.getElementById(IDS.modal)) return;
+    const saved = CreateSubtaskSettings.load();
+    let context = null;
+    let worker = null;
+    let statusEl, submitBtn, cancelBtn, info;
+    const setStatus = (msg, err = false) => {
+      if (!statusEl) return;
+      statusEl.textContent = msg || "";
+      Object.assign(statusEl.style, {
+        color: err ? "#b91c1c" : "#64748b",
+        fontSize: "12px",
+      });
+    };
+    const renderInfo = () => {
+      if (!info) return;
+      info.innerHTML = "";
+      const putInfo = (label, value) => {
+        const l = document.createElement("div");
+        l.textContent = label;
+        Object.assign(l.style, { color: "#64748b" });
+        const v = document.createElement("div");
+        v.textContent = value || "-";
+        Object.assign(v.style, { color: "inherit", wordBreak: "break-word" });
+        info.appendChild(l);
+        info.appendChild(v);
+      };
+      putInfo("父任务", context?.key || getCurrentIssueKey());
+      putInfo("修复版本", context?.fixVersionName || "正在加载...");
+      putInfo("经办人", worker?.displayName || "正在加载...");
+    };
+    const modal = new ReportModal("", {
+      title: "创建测试子任务",
+      bodyBuilder(content, m) {
+        content.style.overflow = "auto";
+        content.style.gap = "12px";
+        const makeInput = (type, value) => {
+          const el = document.createElement("input");
+          el.type = type;
+          el.value = value || "";
+          Object.assign(el.style, {
+            height: "32px", padding: "0 10px",
+            border: "1px solid var(--tm-border)", borderRadius: "8px",
+            outline: "none", fontSize: "12px",
+            background: "transparent", color: "inherit",
+            boxSizing: "border-box", width: "100%",
+          });
+          return el;
+        };
+        const makeField = (label, input, hint) => {
+          const wrap = document.createElement("label");
+          Object.assign(wrap.style, { display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px", color: "#64748b" });
+          const span = document.createElement("span");
+          span.textContent = label;
+          wrap.appendChild(span);
+          wrap.appendChild(input);
+          if (hint) {
+            const h = document.createElement("span");
+            h.textContent = hint;
+            Object.assign(h.style, { color: "#94a3b8", fontSize: "11px" });
+            wrap.appendChild(h);
+          }
+          return wrap;
+        };
+        info = document.createElement("div");
+        Object.assign(info.style, {
+          border: "1px solid var(--tm-border)",
+          borderRadius: "10px",
+          padding: "10px 12px",
+          display: "grid",
+          gridTemplateColumns: "96px minmax(0, 1fr)",
+          gap: "6px 10px",
+          fontSize: "12px",
+        });
+        content.appendChild(info);
+        renderInfo();
+
+        const summaryInput = makeInput("text", "");
+        summaryInput.placeholder = "请输入子任务标题";
+        content.appendChild(makeField("标题", summaryInput));
+        const hoursInput = makeInput("text", saved.hours || "0.5h");
+        content.appendChild(makeField("预估工时", hoursInput, "支持 0.5h、0.5、4h、30m 写法"));
+
+        statusEl = document.createElement("div");
+        setStatus("正在加载当前任务修复版本和登录用户...");
+        content.appendChild(statusEl);
+        m.__createSubtaskForm = { summaryInput, hoursInput };
+        Promise.all([fetchCurrentIssueContextForSubtask(), getCurrentWorker()])
+          .then(([ctx, u]) => {
+            context = ctx;
+            worker = u;
+            renderInfo();
+            if (!context.fixVersionId) {
+              setStatus("当前任务没有修复版本，无法创建子任务", true);
+              return;
+            }
+            setStatus(`将创建测试子任务，修复版本使用“${context.fixVersionName}”，经办人使用“${u.displayName}”。`);
+            if (submitBtn) submitBtn.disabled = false;
+          })
+          .catch((e) => {
+            log("加载创建子任务上下文失败", e);
+            renderInfo();
+            setStatus(e.message || "加载失败", true);
+            if (submitBtn) submitBtn.disabled = true;
+          });
+      },
+      footerBuilder(footer, m) {
+        cancelBtn = mkBtn("取消", { variant: "ghost", size: "md" });
+        cancelBtn.onclick = () => m.close();
+        submitBtn = mkBtn("创建子任务", { variant: "primary", size: "md" });
+        submitBtn.disabled = true;
+        submitBtn.onclick = async () => {
+          const f = m.__createSubtaskForm;
+          if (!f || !context || !worker) return;
+          const summary = (f.summaryInput.value || "").trim();
+          const estimate = normalizeWorkEstimate(f.hoursInput.value);
+          if (!summary) {
+            setStatus("标题不能为空", true);
+            return;
+          }
+          if (!estimate) {
+            setStatus("工时格式不正确，请填写 0.5h、0.5、4h 或 30m", true);
+            return;
+          }
+          CreateSubtaskSettings.save({
+            hours: f.hoursInput.value || "",
+          });
+          submitBtn.disabled = true;
+          cancelBtn.disabled = true;
+          setStatus("正在创建子任务...");
+          try {
+            const created = await postCreateSubtask({ context, worker, summary, estimate });
+            const keyText = created.key ? ` ${created.key}` : "";
+            setStatus(`已创建子任务${keyText}，正在刷新页面...`);
+            toast(`已创建子任务${keyText}`);
+            setTimeout(() => location.reload(), 800);
+          } catch (e) {
+            log("创建子任务失败", e);
+            setStatus(e.message || "创建失败", true);
+            submitBtn.disabled = false;
+            cancelBtn.disabled = false;
+          }
+        };
+        footer.appendChild(cancelBtn);
+        footer.appendChild(submitBtn);
+      },
+    });
+    void modal;
+  };
   const openSubtaskWorklogPanel = async (issueKey) => {
     if (document.getElementById(IDS.modal)) return;
     const key = String(issueKey || "").trim();
@@ -2671,6 +2991,8 @@
     !!document.getElementById(IDS.btnToolbar) +
     !!document.getElementById(IDS.btnDashboard) +
     !!document.getElementById(IDS.btnTitle);
+  const countIssueActionBtns = () =>
+    countActionBtns() + !!document.getElementById(IDS.btnCreateSubtask);
   const getOpsBar = () =>
     qs(SEL.opsBar) ||
     (qs(SEL.splitPaneRight) && qs(SEL.opsBar, qs(SEL.splitPaneRight)));
@@ -2690,25 +3012,31 @@
   };
 
   const ensureToolbarButton = () => {
-    if (!isTestExecutionPage()) return false;
+    if (!isJiraIssuePage()) return false;
     const ops = getOpsBar();
     if (!ops) return false;
     const wrap = ensureToolbarWrap(ops);
     if (!wrap) return false;
     let changed = false;
-    if (!document.getElementById(IDS.btnToolbar)) {
+    if (!document.getElementById(IDS.btnCreateSubtask)) {
+      const b = mkBtn("创建子任务", { variant: "ghost", size: "md", id: IDS.btnCreateSubtask });
+      b.onclick = () => openCreateSubtaskPanel();
+      wrap.appendChild(b);
+      changed = true;
+    }
+    if (isTestExecutionPage() && !document.getElementById(IDS.btnToolbar)) {
       const b = mkBtn("生成测试报告", { variant: "primary", size: "md", id: IDS.btnToolbar });
       b.onclick = generateReport;
       wrap.appendChild(b);
       changed = true;
     }
-    if (!document.getElementById(IDS.btnDashboard)) {
+    if (isTestExecutionPage() && !document.getElementById(IDS.btnDashboard)) {
       const b = mkBtn("配置仪表盘", { variant: "ghost", size: "md", id: IDS.btnDashboard });
       b.onclick = () => configureDashboard(b);
       wrap.appendChild(b);
       changed = true;
     }
-    if (!document.getElementById(IDS.btnSettings)) {
+    if (isTestExecutionPage() && !document.getElementById(IDS.btnSettings)) {
       const b = mkBtn("设置", { variant: "ghost", size: "md", id: IDS.btnSettings });
       b.onclick = () => openSettingsPanel();
       wrap.appendChild(b);
@@ -2798,6 +3126,7 @@
   const needButtons = () => {
     if (isTestExecutionPage() && countActionBtns() < 2) return true;
     if (isJiraIssuePage()) {
+      if (!document.getElementById(IDS.btnCreateSubtask)) return true;
       const rows = getSubtaskRows();
       if (rows.length && rows.some((tr) => !tr.querySelector(`.${WORKLOG_BTN}`))) return true;
     }
@@ -2810,14 +3139,16 @@
   };
   const rearmOnce = () => {
     let changed = false;
-    if (isTestExecutionPage()) {
+    if (isJiraIssuePage()) {
       changed = ensureToolbarButton() || changed;
+    }
+    if (isTestExecutionPage()) {
       changed = ensureTitleButton() || changed;
       ensureFloatButton();
     }
     if (isJiraIssuePage()) changed = ensureSubtaskWorklogButtons() || changed;
     if (isXrayReportListPage()) changed = ensureReportListButtons() || changed;
-    if (countActionBtns() >= 2) {
+    if (countIssueActionBtns() >= 2) {
       const fb = document.getElementById(IDS.btnFloat);
       if (fb) fb.style.display = "none";
     }
@@ -2949,5 +3280,6 @@
   window.__tm_forceRearm = () => { quickSpin = 0; rearm(); };
   window.__tm_configureDashboard = () => configureDashboard();
   window.__tm_openSettings = openSettingsPanel;
+  window.__tm_openCreateSubtaskPanel = openCreateSubtaskPanel;
   window.__tm_openSubtaskWorklogPanel = openSubtaskWorklogPanel;
 })();
