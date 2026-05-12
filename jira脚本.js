@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-12.2
+// @version      2026-05-12.3
 // @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮 + Tempo当天标题复制
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
@@ -3516,6 +3516,10 @@
     const candidates = getOpsCandidates();
     return candidates.find(isVisibleNode) || candidates[0] || null;
   };
+  const getTransitionButtonGroup = () =>
+    qs("#opsbar-opsbar-transitions") ||
+    qs("#opsbar-transitions_more")?.closest(".aui-buttons, .pluggable-ops") ||
+    null;
   const closestVisibleToolbar = (el) => {
     const wrap = el?.closest?.(`#${IDS.toolbarWrap}`);
     const bar = wrap?.closest?.(".command-bar, .aui-toolbar2, [data-test-id='issue.opsbar']");
@@ -3532,9 +3536,21 @@
         marginLeft: "8px", display: "inline-flex",
         gap: "8px", alignItems: "center",
       });
-      (target || ops).appendChild(wrap);
+      const transitionGroup = getTransitionButtonGroup();
+      if (transitionGroup?.parentNode) {
+        transitionGroup.parentNode.insertBefore(wrap, transitionGroup.nextSibling);
+      } else {
+        (target || ops).appendChild(wrap);
+      }
     } else {
-      if (wrap.parentNode !== target) (target || ops).appendChild(wrap);
+      const transitionGroup = getTransitionButtonGroup();
+      if (transitionGroup?.parentNode) {
+        if (transitionGroup.nextSibling !== wrap) {
+          transitionGroup.parentNode.insertBefore(wrap, transitionGroup.nextSibling);
+        }
+      } else if (wrap.parentNode !== target) {
+        (target || ops).appendChild(wrap);
+      }
     }
     return wrap;
   };

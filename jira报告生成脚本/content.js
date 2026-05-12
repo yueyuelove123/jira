@@ -3500,6 +3500,10 @@
     const candidates = getOpsCandidates();
     return candidates.find(isVisibleNode) || candidates[0] || null;
   };
+  const getTransitionButtonGroup = () =>
+    qs("#opsbar-opsbar-transitions") ||
+    qs("#opsbar-transitions_more")?.closest(".aui-buttons, .pluggable-ops") ||
+    null;
   const closestVisibleToolbar = (el) => {
     const wrap = el?.closest?.(`#${IDS.toolbarWrap}`);
     const bar = wrap?.closest?.(".command-bar, .aui-toolbar2, [data-test-id='issue.opsbar']");
@@ -3516,9 +3520,21 @@
         marginLeft: "8px", display: "inline-flex",
         gap: "8px", alignItems: "center",
       });
-      (target || ops).appendChild(wrap);
+      const transitionGroup = getTransitionButtonGroup();
+      if (transitionGroup?.parentNode) {
+        transitionGroup.parentNode.insertBefore(wrap, transitionGroup.nextSibling);
+      } else {
+        (target || ops).appendChild(wrap);
+      }
     } else {
-      if (wrap.parentNode !== target) (target || ops).appendChild(wrap);
+      const transitionGroup = getTransitionButtonGroup();
+      if (transitionGroup?.parentNode) {
+        if (transitionGroup.nextSibling !== wrap) {
+          transitionGroup.parentNode.insertBefore(wrap, transitionGroup.nextSibling);
+        }
+      } else if (wrap.parentNode !== target) {
+        (target || ops).appendChild(wrap);
+      }
     }
     return wrap;
   };
