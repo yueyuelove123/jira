@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-07.23
-// @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮
+// @version      2026-05-12.1
+// @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮 + Tempo当天标题复制
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
 // @match        https://jira.cjdropshipping.cn/secure/XrayReport*
+// @match        https://jira.cjdropshipping.cn/secure/Tempo.jspa*
 // @run-at       document-idle
 // @grant        none
 // @license      MIT
@@ -3631,11 +3632,120 @@
     });
     return true;
   };
+
+  /* ========== Tempo title copy ========== */
+  const TEMPO_COPY_BTN = "tm-tempo-copy-today-titles";
+  const isTempoMyWorkPage = () =>
+    location.pathname === "/secure/Tempo.jspa" && /#\/my-work\//.test(location.hash || "");
+  const getTempoTodayId = () => formatDateYmd(new Date());
+  const getTempoTodayDay = () =>
+    document.getElementById(getTempoTodayId()) ||
+    qs('[name="calendarListViewDay"].tempo-mywork-calendar-today') ||
+    null;
+  const getTempoCardTitle = (card) => {
+    const titleEl =
+      qsa("div[title]", card).find((el) => {
+        const v = el.getAttribute("title") || "";
+        return v && !/^[A-Z][A-Z0-9_]+-\d+$/.test(v) && !/^\d+(?:\.\d+)?\s*[hm]$/i.test(v);
+      }) || null;
+    return (titleEl?.getAttribute("title") || txt(titleEl)).trim();
+  };
+  const collectTempoTodayTitleLines = () => {
+    const day = getTempoTodayDay();
+    if (!day) return [];
+    const seen = new Set();
+    return qsa('[name="tempoWorklogCard"][data-type="WORKLOG"]', day)
+      .map((card) => {
+        const key =
+          txt(qs('[name="tempoCardIssueKey"] a', card)) ||
+          (card.querySelector('a[href*="/browse/"]')?.textContent || "").trim();
+        const title = getTempoCardTitle(card);
+        return { key, title };
+      })
+      .filter(({ key, title }) => key || title)
+      .map(({ key, title }) => `${key ? `${key} ` : ""}${title}`.trim())
+      .filter((line) => {
+        if (!line || seen.has(line)) return false;
+        seen.add(line);
+        return true;
+      });
+  };
+  const copyText = async (value) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const ta = document.createElement("textarea");
+    ta.value = value;
+    ta.setAttribute("readonly", "");
+    Object.assign(ta.style, {
+      position: "fixed",
+      left: "-9999px",
+      top: "0",
+      opacity: "0",
+    });
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (!ok) throw new Error("execCommand copy failed");
+  };
+  const copyTempoTodayTitles = async () => {
+    const lines = collectTempoTodayTitleLines();
+    if (!lines.length) {
+      toast("当天没有可复制的工时标题", true);
+      return;
+    }
+    await copyText(lines.join("\n"));
+    toast(`已复制当天 ${lines.length} 条标题`);
+  };
+  const getTempoButtonHost = () =>
+    qs('[data-testid="toolbar"] [data-testid="right-section"]') ||
+    qs('[data-testid="toolbar"]') ||
+    qs('[data-testid="tempo-navigation-header"]') ||
+    qs("#tempo-app") ||
+    qs("#tempo-nav") ||
+    document.body;
+  const ensureTempoCopyButton = () => {
+    if (!isTempoMyWorkPage()) return false;
+    if (document.getElementById(TEMPO_COPY_BTN)) return false;
+    const host = getTempoButtonHost();
+    if (!host) return false;
+    const b = mkBtn("复制当天标题", { variant: "primary", size: "md", id: TEMPO_COPY_BTN });
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await copyTempoTodayTitles();
+      } catch (e) {
+        log("复制 Tempo 当天标题失败", e);
+        toast("复制失败，请刷新后重试", true);
+      } finally {
+        b.disabled = false;
+      }
+    };
+    Object.assign(b.style, {
+      marginLeft: "8px",
+      height: "32px",
+      flex: "0 0 auto",
+    });
+    if (host === document.body) {
+      Object.assign(b.style, {
+        position: "fixed",
+        right: "16px",
+        bottom: "64px",
+        zIndex: 9999,
+        boxShadow: "0 6px 16px rgba(0,0,0,0.2)",
+      });
+    }
+    host.appendChild(b);
+    return true;
+  };
  
   /* ========== Scheduling ========== */
   const MAX_QUICK = 10, HB_MS = 1000, HB_BURST = 40;
   let quickSpin = 0, hbTimer = null, hbLeft = 0;
   const needButtons = () => {
+    if (isTempoMyWorkPage() && !document.getElementById(TEMPO_COPY_BTN)) return true;
     if (isTestExecutionPage() && countVisibleActionBtns() < 2) return true;
     if (isJiraIssuePage()) {
       if (!closestVisibleToolbar(document.getElementById(IDS.btnCreateSubtask))) return true;
@@ -3651,6 +3761,7 @@
   };
   const rearmOnce = () => {
     let changed = false;
+    if (isTempoMyWorkPage()) changed = ensureTempoCopyButton() || changed;
     if (isJiraIssuePage()) {
       changed = ensureToolbarButton() || changed;
     }
