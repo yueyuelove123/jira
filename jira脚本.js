@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira测试报告生成器
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-12.1
+// @version      2026-05-12.2
 // @description  Test Execution 一键报告 + 合并执行 + 子任务创建 + 子任务行工时记录与状态流转 + 报障人选择 + 已执行统计开关 + 仪表盘配置 + 截图预览 + 设置面板 + 列表行按钮 + Tempo当天标题复制
 // @author       shengjiang
 // @match        https://jira.cjdropshipping.cn/browse/*
@@ -73,6 +73,15 @@
     const b = document.createElement("button");
     b.textContent = text;
     b.className = `tm-btn tm-btn--${variant} tm-btn--${size}`;
+    if (id) b.id = id;
+    return b;
+  };
+  const mkNativeBtn = (text, { primary = false, id } = {}) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = text;
+    b.className = primary ? "aui-button aui-button-primary" : "aui-button";
+    b.setAttribute("resolved", "");
     if (id) b.id = id;
     return b;
   };
@@ -3541,26 +3550,30 @@
     const wrap = ensureToolbarWrap(ops);
     if (!wrap) return false;
     let changed = false;
-    if (!document.getElementById(IDS.btnCreateSubtask)) {
-      const b = mkBtn("创建子任务", { variant: "ghost", size: "md", id: IDS.btnCreateSubtask });
+    const createSubtaskBtn = document.getElementById(IDS.btnCreateSubtask);
+    if (isTestExecutionPage() && createSubtaskBtn) {
+      createSubtaskBtn.remove();
+      changed = true;
+    } else if (!isTestExecutionPage() && !createSubtaskBtn) {
+      const b = mkNativeBtn("创建子任务", { id: IDS.btnCreateSubtask });
       b.onclick = () => openCreateSubtaskPanel();
       wrap.appendChild(b);
       changed = true;
     }
     if (isTestExecutionPage() && !document.getElementById(IDS.btnToolbar)) {
-      const b = mkBtn("生成测试报告", { variant: "primary", size: "md", id: IDS.btnToolbar });
+      const b = mkNativeBtn("生成测试报告", { primary: true, id: IDS.btnToolbar });
       b.onclick = generateReport;
       wrap.appendChild(b);
       changed = true;
     }
     if (isTestExecutionPage() && !document.getElementById(IDS.btnDashboard)) {
-      const b = mkBtn("配置仪表盘", { variant: "ghost", size: "md", id: IDS.btnDashboard });
+      const b = mkNativeBtn("配置仪表盘", { id: IDS.btnDashboard });
       b.onclick = () => configureDashboard(b);
       wrap.appendChild(b);
       changed = true;
     }
     if (isTestExecutionPage() && !document.getElementById(IDS.btnSettings)) {
-      const b = mkBtn("设置", { variant: "ghost", size: "md", id: IDS.btnSettings });
+      const b = mkNativeBtn("设置", { id: IDS.btnSettings });
       b.onclick = () => openSettingsPanel();
       wrap.appendChild(b);
       changed = true;
@@ -3597,7 +3610,7 @@
       fb.style.display = countActionBtns() >= 2 ? "none" : "";
       return false;
     }
-    const btn = mkBtn("生成报告", { variant: "primary", size: "md", id: IDS.btnFloat });
+    const btn = mkNativeBtn("生成报告", { primary: true, id: IDS.btnFloat });
     btn.onclick = generateReport;
     Object.assign(btn.style, {
       position: "fixed", right: "16px", bottom: "16px",
@@ -3615,7 +3628,7 @@
       const link = tr.querySelector('td a[href*="/browse/"]');
       if (!link) return;
       const td = document.createElement("td");
-      const btn = mkBtn("生成报告", { variant: "primary", size: "sm" });
+      const btn = mkNativeBtn("生成报告", { primary: true });
       btn.classList.add(ROW_BTN);
       btn.onclick = (e) => {
         e.preventDefault();
@@ -3698,19 +3711,30 @@
     await copyText(lines.join("\n"));
     toast(`已复制当天 ${lines.length} 条标题`);
   };
-  const getTempoButtonHost = () =>
-    qs('[data-testid="toolbar"] [data-testid="right-section"]') ||
-    qs('[data-testid="toolbar"]') ||
-    qs('[data-testid="tempo-navigation-header"]') ||
-    qs("#tempo-app") ||
-    qs("#tempo-nav") ||
-    document.body;
+  const getTempoButtonHost = () => {
+    const header = qs('[data-testid="tempo-navigation-header"]');
+    const user = header?.firstElementChild || null;
+    return user || header || document.body;
+  };
+  const mkTempoNativeBtn = (text, id) => {
+    const ref = qs('[data-testid="tempo-navigation-header"] button[data-button-type="split-action"]');
+    const b = ref ? ref.cloneNode(true) : mkNativeBtn(text, { primary: true });
+    b.id = id;
+    b.type = "button";
+    b.disabled = false;
+    b.removeAttribute("data-button-type");
+    b.setAttribute("data-state", "not-active");
+    b.setAttribute("title", text);
+    const label = b.querySelector("span span") || b;
+    label.textContent = text;
+    return b;
+  };
   const ensureTempoCopyButton = () => {
     if (!isTempoMyWorkPage()) return false;
     if (document.getElementById(TEMPO_COPY_BTN)) return false;
     const host = getTempoButtonHost();
     if (!host) return false;
-    const b = mkBtn("复制当天标题", { variant: "primary", size: "md", id: TEMPO_COPY_BTN });
+    const b = mkTempoNativeBtn("复制当天标题", TEMPO_COPY_BTN);
     b.onclick = async () => {
       b.disabled = true;
       try {
@@ -3723,7 +3747,7 @@
       }
     };
     Object.assign(b.style, {
-      marginLeft: "8px",
+      marginLeft: "16px",
       height: "32px",
       flex: "0 0 auto",
     });
@@ -3747,7 +3771,7 @@
     if (isTempoMyWorkPage() && !document.getElementById(TEMPO_COPY_BTN)) return true;
     if (isTestExecutionPage() && countVisibleActionBtns() < 2) return true;
     if (isJiraIssuePage()) {
-      if (!closestVisibleToolbar(document.getElementById(IDS.btnCreateSubtask))) return true;
+      if (!isTestExecutionPage() && !closestVisibleToolbar(document.getElementById(IDS.btnCreateSubtask))) return true;
       const rows = getSubtaskRows();
       if (rows.length && rows.some((tr) => !tr.querySelector(`.${WORKLOG_BTN}`))) return true;
     }
