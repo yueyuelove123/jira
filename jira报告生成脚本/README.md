@@ -1,6 +1,6 @@
 # Jira 测试报告生成器
 
-这是 `jira脚本.js` 的 Chrome 扩展版本，适用于 Jira 问题页和 Xray Test Execution 页面。扩展主体逻辑与油猴脚本保持一致，方便在不安装 Tampermonkey 的环境中使用。
+这是 `jira脚本.js` 的 Chrome 扩展版本，适用于 Jira 问题页、Xray Test Execution 页面和 Tempo 我的工时页面。扩展主体逻辑与油猴脚本保持一致，方便在不安装 Tampermonkey 的环境中使用。
 
 更新记录见：[CHANGELOG.md](https://github.com/yueyuelove123/jira/blob/main/CHANGELOG.md)
 
@@ -17,6 +17,7 @@
 - 仪表盘配置：自动创建 Jira 筛选器，更新门户标题，并同步 4 个缺陷分布 gadget。
 - 仪表盘截图：生成 4 宫格缺陷分布图，支持预览、复制到剪贴板；剪贴板不可用时自动下载 PNG。
 - Xray 报告列表增强：在 Test Execution 报告列表每行追加「生成报告」按钮，新标签打开后自动生成报告。
+- Tempo 工时标题复制：在我的工时列表页点击「复制当天标题」，一键复制当天工时卡片标题。
 - 设置面板：可配置候选报障人、门户标题前缀、pageId / boardId / gadget IDs、共享组等。
 - 快捷键：在 Test Execution 页面按 `Alt + R` 打开报告弹窗。
 
@@ -25,6 +26,7 @@
 - Jira 问题页：工具栏显示「创建子任务」，子任务列表行显示「记工时」。
 - Test Execution 页面：工具栏显示「生成测试报告」「配置仪表盘」「设置」，也可按 `Alt + R`。
 - Xray Test Execution 报告列表页：每行显示「生成报告」。
+- Tempo 我的工时列表页：顶部工具栏显示「复制当天标题」。
 - Chrome 扩展图标：点击后等价于 `Alt + R`；如果当前不是 Test Execution 页面，则打开设置面板。
 
 ## 安装
@@ -33,7 +35,7 @@
 2. 开启右上角「开发者模式」。
 3. 点击「加载已解压的扩展程序」。
 4. 选择 `jira报告生成脚本/` 目录。
-5. 访问 `https://jira.cjdropshipping.cn/browse/<ISSUE-KEY>` 或 Xray 报告页使用。
+5. 访问 `https://jira.cjdropshipping.cn/browse/<ISSUE-KEY>`、Xray 报告页或 Tempo 我的工时页使用。
 
 ## 文件说明
 

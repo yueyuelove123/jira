@@ -3660,10 +3660,9 @@
           txt(qs('[name="tempoCardIssueKey"] a', card)) ||
           (card.querySelector('a[href*="/browse/"]')?.textContent || "").trim();
         const title = getTempoCardTitle(card);
-        return { key, title };
+        return title || key;
       })
-      .filter(({ key, title }) => key || title)
-      .map(({ key, title }) => `${key ? `${key} ` : ""}${title}`.trim())
+      .filter(Boolean)
       .filter((line) => {
         if (!line || seen.has(line)) return false;
         seen.add(line);
